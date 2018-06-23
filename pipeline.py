@@ -81,6 +81,35 @@ def map_windows_to_centroids(window_centroids, warped_e):
         output = np.array(cv2.merge((warped_e,warped_e,warped_e)),np.uint8)
     
     return output
+    
+def visualizeFit(binary_warped, left_fit, right_fit):
+    # Generate x and y values for plotting
+    ploty = np.linspace(0, binary_warped.shape[0]-1, binary_warped.shape[0] )
+    left_fitx = left_fit[0]*ploty**2 + left_fit[1]*ploty + left_fit[2]
+    right_fitx = right_fit[0]*ploty**2 + right_fit[1]*ploty + right_fit[2]
+    
+    # Create an image to draw on and an image to show the selection window
+    out_img = np.dstack((binary_warped, binary_warped, binary_warped))*255
+    window_img = np.zeros_like(out_img)
+
+    # Generate a polygon to illustrate the search window area
+    # And recast the x and y points into usable format for cv2.fillPoly()
+    left_line_window1 = np.array([np.transpose(np.vstack([left_fitx-margin, ploty]))])
+    left_line_window2 = np.array([np.flipud(np.transpose(np.vstack([left_fitx+margin, 
+                                  ploty])))])
+    left_line_pts = np.hstack((left_line_window1, left_line_window2))
+    right_line_window1 = np.array([np.transpose(np.vstack([right_fitx-margin, ploty]))])
+    right_line_window2 = np.array([np.flipud(np.transpose(np.vstack([right_fitx+margin, 
+                                  ploty])))])
+    right_line_pts = np.hstack((right_line_window1, right_line_window2))
+
+    # Draw the lane onto the warped blank image
+    cv2.fillPoly(window_img, np.int_([left_line_pts]), (0,255, 0))
+    cv2.fillPoly(window_img, np.int_([right_line_pts]), (0,255, 0))
+    result = cv2.addWeighted(out_img, 1, window_img, 0.3, 0)
+    
+    return result
+    
 
 def sobel(fname):
     image = mpimg.imread(fname) 
@@ -170,14 +199,27 @@ def getCalibrationPoints(fname):
     
     return (None, None)
     
-def test_before_after(img_before, img_after, ofname):
-    print(img_before.shape)
-    print(img_after.shape)
+def fitPolynomial(window_centroids, window_height):
+    left_x = [c[0] for c in window_centroids]
+    left_y = [i*window_height + window_height/2 for i in range(len(left_x))]
+    
+    right_x = [c[1] for c in window_centroids]
+    right_y = left_y
+    
+    left_fit = np.polyfit(left_y, left_x, 2)
+    right_fit = np.polyfit(right_y, right_x, 2)
+    
+    return (left_fit, right_fit)
+    
+def test_before_after(img_before, img_after, ofname, convert = True):
+    if convert:
+        img_before = cv2.cvtColor(img_before, cv2.COLOR_BGR2RGB)
+        img_after = cv2.cvtColor(img_after, cv2.COLOR_BGR2RGB)
     f, (ax1, ax2) = plt.subplots(1, 2, figsize=(24, 9))
     f.tight_layout()
-    ax1.imshow(cv2.cvtColor(img_before, cv2.COLOR_BGR2RGB))
+    ax1.imshow(img_before)
     ax1.set_title('Original Image', fontsize=50)
-    ax2.imshow(cv2.cvtColor(img_after, cv2.COLOR_BGR2RGB))
+    ax2.imshow(img_after)
     ax2.set_title('Undistorted Image', fontsize=50)
     plt.subplots_adjust(left=0., right=1, top=0.9, bottom=0.)
     plt.savefig(ofname)
@@ -185,7 +227,9 @@ def test_before_after(img_before, img_after, ofname):
 if __name__ == "__main__":
     cal_dir = "camera_cal"
     cal_save = "cal_data.p"
+    fname = os.path.join("test_images", "straight_lines2.jpg")
 
+    # Various points for the transformation. The closer ones are listed first
     transform_src = np.array([[250, 680], [535, 490], [752, 490], [1058, 680]], np.float32)
     transform_dst = np.array([[250, 680], [250, 490], [1058, 490], [1058, 680]], np.float32)
     
@@ -193,8 +237,12 @@ if __name__ == "__main__":
     transform_dst = np.array([[250, 680], [250, 450], [1058, 450], [1058, 680]], np.float32)
     
     #transform_src = np.array([[250, 680], [624, 431], [655, 431], [1058, 680]], np.float32)
-    #transform_dst = np.array([[250, 680], [250, 431], [1058, 431], [1058, 680]], np.float32)
+    #transform_dst = np.array([[250, 680], [250, 431], [1058, 431], [1058, 680]], np.float32
     
+    # window settings
+    window_width = 50 
+    window_height = 80 # Break image into 9 vertical layers since image height is 720
+    margin = 100 # How much to slide left and right for searching
     
     print("Getting calibration points")
     # Collect calibration points
@@ -222,9 +270,10 @@ if __name__ == "__main__":
             
     print("Getting transformation matrix M")
     M = cv2.getPerspectiveTransform(transform_src, transform_dst)
+    Minv = cv2.getPerspectiveTransform(transform_dst, transform_src)
     
     print("Testing")
-    fname = os.path.join("test_images", "straight_lines2.jpg")
+    
     img = cv2.imread(fname)
     und = undistort(img, objectPoints, imagePoints)
     
@@ -232,41 +281,19 @@ if __name__ == "__main__":
     c_edges = np.dstack(( np.zeros_like(edges), edges, np.zeros_like(edges))) * 255
     c_edges = c_edges.astype(np.uint8)
     combined = c_edges | img
+    test_before_after(img, c_edges, "test_sobel.jpg")
     
     img_size = (und.shape[1], und.shape[0])
     warped = cv2.warpPerspective(combined, M, img_size, flags=cv2.INTER_NEAREST)
     warped_e = cv2.warpPerspective(edges, M, img_size, flags=cv2.INTER_NEAREST)
-    
-    # Test out calibration
-    test_before_after(c_edges, warped, "test.jpg")
 
-    # window settings
-    window_width = 50 
-    window_height = 80 # Break image into 9 vertical layers since image height is 720
-    margin = 100 # How much to slide left and right for searching
-    
     window_centroids = find_window_centroids(warped_e, window_width, window_height, margin)
-
+    left_fit, right_fit = fitPolynomial(window_centroids, window_height)
     output = map_windows_to_centroids(window_centroids, warped_e)
- 
-    left_x = [c[0] for c in window_centroids]
-    left_y = [i*window_height + window_height/2 for i in range(len(left_x))]
+
+    test_before_after(warped_e, output, "test_detect.jpg", False)
     
-    right_x = [c[1] for c in window_centroids]
-    right_y = left_y
-    
-    left_fit = np.polyfit(left_y, left_x, 2)
-    right_fit = np.polyfit(right_y, right_x, 2)
-    
-    print (left_fit)
- 
-    # Display the final results
-    f, (ax1, ax2) = plt.subplots(1, 2, figsize=(24, 9))
-    f.tight_layout()
-    ax1.imshow(warped_e)
-    ax1.set_title('Original Image', fontsize=50)
-    ax2.imshow(output)
-    ax2.set_title('Undistorted Image', fontsize=50)
-    plt.subplots_adjust(left=0., right=1, top=0.9, bottom=0.)
-    plt.savefig("test_2.jpg")
+    result = visualizeFit(warped_e, left_fit, right_fit)
+    w_result = cv2.warpPerspective(result, Minv, img_size, flags=cv2.INTER_NEAREST)
+    test_before_after(img, w_result, "test_draw.jpg", False)
     
