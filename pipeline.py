@@ -297,3 +297,25 @@ if __name__ == "__main__":
     w_result = cv2.warpPerspective(result, Minv, img_size, flags=cv2.INTER_NEAREST)
     test_before_after(img, w_result, "test_draw.jpg", False)
     
+    # Plot the lines
+    ploty = np.linspace(0, warped_e.shape[0]-1, warped_e.shape[0] )
+    left_fitx = left_fit[0]*ploty**2 + left_fit[1]*ploty + left_fit[2]
+    right_fitx = right_fit[0]*ploty**2 + right_fit[1]*ploty + right_fit[2]
+    color_warp = np.zeros_like(warped).astype(np.uint8)
+    #color_warp = np.dstack((warp_zero, warp_zero, warp_zero))
+
+    # Recast the x and y points into usable format for cv2.fillPoly()
+    pts_left = np.array([np.transpose(np.vstack([left_fitx, ploty]))])
+    pts_right = np.array([np.flipud(np.transpose(np.vstack([right_fitx, ploty])))])
+    pts = np.hstack((pts_left, pts_right))
+
+    print(color_warp.shape)
+    # Draw the lane onto the warped blank image
+    cv2.fillPoly(color_warp, np.int_([pts]), (0,255, 0))
+
+    # Warp the blank back to original image space using inverse perspective matrix (Minv)
+    newwarp = cv2.warpPerspective(color_warp, Minv, (img.shape[1], img.shape[0])) 
+    # Combine the result with the original image
+    result = cv2.addWeighted(und, 1, newwarp, 0.3, 0)
+    test_before_after(img, result, "test_invplt.jpg")
+    
