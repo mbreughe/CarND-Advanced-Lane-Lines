@@ -82,33 +82,25 @@ def map_windows_to_centroids(window_centroids, warped_e):
     
     return output
     
-def visualizeFit(binary_warped, left_fit, right_fit):
-    # Generate x and y values for plotting
-    ploty = np.linspace(0, binary_warped.shape[0]-1, binary_warped.shape[0] )
-    left_fitx = left_fit[0]*ploty**2 + left_fit[1]*ploty + left_fit[2]
-    right_fitx = right_fit[0]*ploty**2 + right_fit[1]*ploty + right_fit[2]
-    
-    # Create an image to draw on and an image to show the selection window
-    out_img = np.dstack((binary_warped, binary_warped, binary_warped))*255
-    window_img = np.zeros_like(out_img)
+def markLanes(img, warped_e, Minv, left_fit, right_fit):
+    ploty = np.linspace(0, warped_e.shape[0]-1, warped_e.shape[0] )
+    left_fitx = left_fit[0]*ploty**2 + left_fit[1]*ploty + left_fit[2]      # (720,)
+    right_fitx = right_fit[0]*ploty**2 + right_fit[1]*ploty + right_fit[2]  # (720,2)
+    color_warp = np.zeros_like(warped).astype(np.uint8)
+    #color_warp = np.dstack((warp_zero, warp_zero, warp_zero))
 
-    # Generate a polygon to illustrate the search window area
-    # And recast the x and y points into usable format for cv2.fillPoly()
-    left_line_window1 = np.array([np.transpose(np.vstack([left_fitx-margin, ploty]))])
-    left_line_window2 = np.array([np.flipud(np.transpose(np.vstack([left_fitx+margin, 
-                                  ploty])))])
-    left_line_pts = np.hstack((left_line_window1, left_line_window2))
-    right_line_window1 = np.array([np.transpose(np.vstack([right_fitx-margin, ploty]))])
-    right_line_window2 = np.array([np.flipud(np.transpose(np.vstack([right_fitx+margin, 
-                                  ploty])))])
-    right_line_pts = np.hstack((right_line_window1, right_line_window2))
+    # Recast the x and y points into usable format for cv2.fillPoly()
+    pts_left = np.array([np.transpose(np.vstack([left_fitx, ploty]))]) # (720,) and (720,) --vstack--> (2,720) --transpose--> (720,2) --np.array--> (1,720,2)
+    pts_right = np.array([np.flipud(np.transpose(np.vstack([right_fitx, ploty])))])
+    pts = np.hstack((pts_left, pts_right))  # (1, 1440, 2)
 
     # Draw the lane onto the warped blank image
-    cv2.fillPoly(window_img, np.int_([left_line_pts]), (0,255, 0))
-    cv2.fillPoly(window_img, np.int_([right_line_pts]), (0,255, 0))
-    result = cv2.addWeighted(out_img, 1, window_img, 0.3, 0)
+    cv2.fillPoly(color_warp, np.int_([pts]), (0,255, 0))
+
+    # Warp the blank back to original image space using inverse perspective matrix (Minv)
+    newwarp = cv2.warpPerspective(color_warp, Minv, (img.shape[1], img.shape[0])) 
     
-    return result
+    return newwarp
     
 
 def sobel(fname):
@@ -272,50 +264,31 @@ if __name__ == "__main__":
     M = cv2.getPerspectiveTransform(transform_src, transform_dst)
     Minv = cv2.getPerspectiveTransform(transform_dst, transform_src)
     
-    print("Testing")
-    
+    print("Undistort")
     img = cv2.imread(fname)
     und = undistort(img, objectPoints, imagePoints)
     
+    print("Sobel")
     edges = sobel(fname)
     c_edges = np.dstack(( np.zeros_like(edges), edges, np.zeros_like(edges))) * 255
     c_edges = c_edges.astype(np.uint8)
     combined = c_edges | img
-    test_before_after(img, c_edges, "test_sobel.jpg")
+    test_before_after(img, combined, "test_sobel.jpg")
     
+    print("warp perspective")
     img_size = (und.shape[1], und.shape[0])
     warped = cv2.warpPerspective(combined, M, img_size, flags=cv2.INTER_NEAREST)
     warped_e = cv2.warpPerspective(edges, M, img_size, flags=cv2.INTER_NEAREST)
 
+    print("detect lanes in warped space")
     window_centroids = find_window_centroids(warped_e, window_width, window_height, margin)
     left_fit, right_fit = fitPolynomial(window_centroids, window_height)
     output = map_windows_to_centroids(window_centroids, warped_e)
+    test_before_after(warped, output, "test_detect.jpg", False)
 
-    test_before_after(warped_e, output, "test_detect.jpg", False)
-    
-    result = visualizeFit(warped_e, left_fit, right_fit)
-    w_result = cv2.warpPerspective(result, Minv, img_size, flags=cv2.INTER_NEAREST)
-    test_before_after(img, w_result, "test_draw.jpg", False)
-    
-    # Plot the lines
-    ploty = np.linspace(0, warped_e.shape[0]-1, warped_e.shape[0] )
-    left_fitx = left_fit[0]*ploty**2 + left_fit[1]*ploty + left_fit[2]
-    right_fitx = right_fit[0]*ploty**2 + right_fit[1]*ploty + right_fit[2]
-    color_warp = np.zeros_like(warped).astype(np.uint8)
-    #color_warp = np.dstack((warp_zero, warp_zero, warp_zero))
-
-    # Recast the x and y points into usable format for cv2.fillPoly()
-    pts_left = np.array([np.transpose(np.vstack([left_fitx, ploty]))])
-    pts_right = np.array([np.flipud(np.transpose(np.vstack([right_fitx, ploty])))])
-    pts = np.hstack((pts_left, pts_right))
-
-    print(color_warp.shape)
-    # Draw the lane onto the warped blank image
-    cv2.fillPoly(color_warp, np.int_([pts]), (0,255, 0))
-
-    # Warp the blank back to original image space using inverse perspective matrix (Minv)
-    newwarp = cv2.warpPerspective(color_warp, Minv, (img.shape[1], img.shape[0])) 
+    print("mark lanes")
+    warped_marking = markLanes(img, warped_e, Minv, left_fit, right_fit)
     # Combine the result with the original image
-    result = cv2.addWeighted(und, 1, newwarp, 0.3, 0)
+    result = cv2.addWeighted(und, 1, warped_marking, 0.3, 0)
     test_before_after(img, result, "test_invplt.jpg")
     
