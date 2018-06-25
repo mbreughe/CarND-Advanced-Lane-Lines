@@ -51,7 +51,7 @@ def find_window_centroids(image, window_width, window_height, margin):
 
     return window_centroids
 
-def map_windows_to_centroids(window_centroids, warped_e):    
+def map_windows_to_centroids(window_centroids, window_width, window_height, warped_e):    
     # If we found any window centers
     if len(window_centroids) > 0:
 
@@ -82,12 +82,12 @@ def map_windows_to_centroids(window_centroids, warped_e):
     
     return output
     
-def markLanes(img, warped, warped_e, Minv, left_fit, right_fit):
+def markLanes(img, warped_e, Minv, left_fit, right_fit):
     ploty = np.linspace(0, warped_e.shape[0]-1, warped_e.shape[0] )
     left_fitx = left_fit[0]*ploty**2 + left_fit[1]*ploty + left_fit[2]      # (720,)
     right_fitx = right_fit[0]*ploty**2 + right_fit[1]*ploty + right_fit[2]  # (720,2)
-    color_warp = np.zeros_like(warped).astype(np.uint8)
-    #color_warp = np.dstack((warp_zero, warp_zero, warp_zero))
+    warp_zero = np.zeros_like(warped_e).astype(np.uint8)
+    color_warp = np.dstack((warp_zero, warp_zero, warp_zero))
 
     # Recast the x and y points into usable format for cv2.fillPoly()
     pts_left = np.array([np.transpose(np.vstack([left_fitx, ploty]))]) # (720,) and (720,) --vstack--> (2,720) --transpose--> (720,2) --np.array--> (1,720,2)
@@ -109,20 +109,33 @@ def sobel(fname):
     ksize = 31 # Choose a larger odd number to smooth gradient measurements
     x_thresh = (20, 100)
     y_thresh = (20, 100)
-    mag_t = (30, 100)
-    dir_thresh = (0.7, 1.3)
+    mag_t = (70, 100)
+    dir_thresh = (0.2, 1.7)
 
     # Apply each of the thresholding functions
     gradx = sobel_abs_axis(image, orient='x', sobel_kernel=ksize, thresh=x_thresh)
     grady = sobel_abs_axis(image, orient='y', sobel_kernel=ksize, thresh=y_thresh)
     mag_binary = sobel_magnitude(image, sobel_kernel=ksize, mag_thresh=mag_t)
     dir_binary = sobel_dir(image, sobel_kernel=ksize, thresh=dir_thresh)
-
+    color_grad = sobel_color(image)
+    
     combined = np.zeros_like(dir_binary)
     #combined[((gradx == 1) & (grady == 1)) | ((mag_binary == 1) & (dir_binary == 1))] = 1
+    #combined[((mag_binary == 1) & (dir_binary == 1)) | (color_grad == 1)] = 1
     combined[((mag_binary == 1) & (dir_binary == 1))] = 1
     
     return combined
+    
+def sobel_color(image, s_thresh=(170, 255)):
+    hls = cv2.cvtColor(image, cv2.COLOR_RGB2HLS)
+    s_channel = hls[:,:,2]
+    
+    # Threshold color channel
+    s_binary = np.zeros_like(s_channel)
+    s_binary[(s_channel >= s_thresh[0]) & (s_channel <= s_thresh[1])] = 1
+
+    return s_binary
+    
 
 def sobel_abs_axis(img, orient='x', sobel_kernel=3, thresh=(0, 255)):
         
@@ -217,6 +230,10 @@ def test_before_after(img_before, img_after, ofname, convert = True):
     plt.savefig(ofname)
     
 def run_pipeline(objectPoints, imagePoints, M, Minv, fname):
+    # window settings
+    window_width = 50 
+    window_height = 80 # Break image into 9 vertical layers since image height is 720
+    margin = 75 # How much to slide left and right for searching
     prefix = os.path.basename(fname).replace('.jpg', '') + "_"
 
     print("Undistort")
@@ -232,17 +249,17 @@ def run_pipeline(objectPoints, imagePoints, M, Minv, fname):
     
     print("warp perspective")
     img_size = (und.shape[1], und.shape[0])
-    warped = cv2.warpPerspective(combined, M, img_size, flags=cv2.INTER_NEAREST)
+    warped = cv2.warpPerspective(img, M, img_size, flags=cv2.INTER_NEAREST)
     warped_e = cv2.warpPerspective(edges, M, img_size, flags=cv2.INTER_NEAREST)
 
     print("detect lanes in warped space")
     window_centroids = find_window_centroids(warped_e, window_width, window_height, margin)
     left_fit, right_fit = fitPolynomial(window_centroids, window_height)
-    output = map_windows_to_centroids(window_centroids, warped_e)
-    test_before_after(warped, output, prefix + "detect.jpg", False)
+    output = map_windows_to_centroids(window_centroids, window_width, window_height, warped_e)
+    test_before_after(warped, output, prefix + "detect.jpg")
 
     print("mark lanes")
-    warped_marking = markLanes(img, warped, warped_e, Minv, left_fit, right_fit)
+    warped_marking = markLanes(img, warped_e, Minv, left_fit, right_fit)
     # Combine the result with the original image
     result = cv2.addWeighted(und, 1, warped_marking, 0.3, 0)
     test_before_after(img, result, prefix + "invplt.jpg")
@@ -259,16 +276,13 @@ if __name__ == "__main__":
     transform_src = np.array([[250, 680], [535, 490], [752, 490], [1058, 680]], np.float32)
     transform_dst = np.array([[250, 680], [250, 490], [1058, 490], [1058, 680]], np.float32)
     
-    transform_src = np.array([[250, 680], [593, 450], [687, 450], [1058, 680]], np.float32)
-    transform_dst = np.array([[250, 680], [250, 450], [1058, 450], [1058, 680]], np.float32)
+    #transform_src = np.array([[250, 680], [593, 450], [687, 450], [1058, 680]], np.float32)
+    #transform_dst = np.array([[250, 680], [250, 450], [1058, 450], [1058, 680]], np.float32)
     
     #transform_src = np.array([[250, 680], [624, 431], [655, 431], [1058, 680]], np.float32)
     #transform_dst = np.array([[250, 680], [250, 431], [1058, 431], [1058, 680]], np.float32
     
-    # window settings
-    window_width = 50 
-    window_height = 80 # Break image into 9 vertical layers since image height is 720
-    margin = 100 # How much to slide left and right for searching
+    
     
     print("Getting calibration points")
     # Collect calibration points
@@ -299,6 +313,9 @@ if __name__ == "__main__":
     Minv = cv2.getPerspectiveTransform(transform_dst, transform_src)
     
     for f in os.listdir(test_dir):
+        print ("Detecting lanes in " + f)
+        if not f.endswith("jpg"):
+            continue
         fname = os.path.join(test_dir, f)
         run_pipeline(objectPoints, imagePoints, M, Minv, fname)
     
