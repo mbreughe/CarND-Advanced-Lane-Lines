@@ -82,7 +82,7 @@ def map_windows_to_centroids(window_centroids, warped_e):
     
     return output
     
-def markLanes(img, warped_e, Minv, left_fit, right_fit):
+def markLanes(img, warped, warped_e, Minv, left_fit, right_fit):
     ploty = np.linspace(0, warped_e.shape[0]-1, warped_e.shape[0] )
     left_fitx = left_fit[0]*ploty**2 + left_fit[1]*ploty + left_fit[2]      # (720,)
     right_fitx = right_fit[0]*ploty**2 + right_fit[1]*ploty + right_fit[2]  # (720,2)
@@ -215,11 +215,45 @@ def test_before_after(img_before, img_after, ofname, convert = True):
     ax2.set_title('Undistorted Image', fontsize=50)
     plt.subplots_adjust(left=0., right=1, top=0.9, bottom=0.)
     plt.savefig(ofname)
+    
+def run_pipeline(objectPoints, imagePoints, M, Minv, fname):
+    prefix = os.path.basename(fname).replace('.jpg', '') + "_"
+
+    print("Undistort")
+    img = cv2.imread(fname)
+    und = undistort(img, objectPoints, imagePoints)
+    
+    print("Sobel")
+    edges = sobel(fname)
+    c_edges = np.dstack(( np.zeros_like(edges), edges, np.zeros_like(edges))) * 255
+    c_edges = c_edges.astype(np.uint8)
+    combined = c_edges | img
+    test_before_after(img, combined, prefix + "sobel.jpg")
+    
+    print("warp perspective")
+    img_size = (und.shape[1], und.shape[0])
+    warped = cv2.warpPerspective(combined, M, img_size, flags=cv2.INTER_NEAREST)
+    warped_e = cv2.warpPerspective(edges, M, img_size, flags=cv2.INTER_NEAREST)
+
+    print("detect lanes in warped space")
+    window_centroids = find_window_centroids(warped_e, window_width, window_height, margin)
+    left_fit, right_fit = fitPolynomial(window_centroids, window_height)
+    output = map_windows_to_centroids(window_centroids, warped_e)
+    test_before_after(warped, output, prefix + "detect.jpg", False)
+
+    print("mark lanes")
+    warped_marking = markLanes(img, warped, warped_e, Minv, left_fit, right_fit)
+    # Combine the result with the original image
+    result = cv2.addWeighted(und, 1, warped_marking, 0.3, 0)
+    test_before_after(img, result, prefix + "invplt.jpg")
+    
+
 
 if __name__ == "__main__":
     cal_dir = "camera_cal"
     cal_save = "cal_data.p"
-    fname = os.path.join("test_images", "straight_lines2.jpg")
+    test_dir = "test_images"
+    
 
     # Various points for the transformation. The closer ones are listed first
     transform_src = np.array([[250, 680], [535, 490], [752, 490], [1058, 680]], np.float32)
@@ -264,31 +298,8 @@ if __name__ == "__main__":
     M = cv2.getPerspectiveTransform(transform_src, transform_dst)
     Minv = cv2.getPerspectiveTransform(transform_dst, transform_src)
     
-    print("Undistort")
-    img = cv2.imread(fname)
-    und = undistort(img, objectPoints, imagePoints)
+    for f in os.listdir(test_dir):
+        fname = os.path.join(test_dir, f)
+        run_pipeline(objectPoints, imagePoints, M, Minv, fname)
     
-    print("Sobel")
-    edges = sobel(fname)
-    c_edges = np.dstack(( np.zeros_like(edges), edges, np.zeros_like(edges))) * 255
-    c_edges = c_edges.astype(np.uint8)
-    combined = c_edges | img
-    test_before_after(img, combined, "test_sobel.jpg")
-    
-    print("warp perspective")
-    img_size = (und.shape[1], und.shape[0])
-    warped = cv2.warpPerspective(combined, M, img_size, flags=cv2.INTER_NEAREST)
-    warped_e = cv2.warpPerspective(edges, M, img_size, flags=cv2.INTER_NEAREST)
-
-    print("detect lanes in warped space")
-    window_centroids = find_window_centroids(warped_e, window_width, window_height, margin)
-    left_fit, right_fit = fitPolynomial(window_centroids, window_height)
-    output = map_windows_to_centroids(window_centroids, warped_e)
-    test_before_after(warped, output, "test_detect.jpg", False)
-
-    print("mark lanes")
-    warped_marking = markLanes(img, warped_e, Minv, left_fit, right_fit)
-    # Combine the result with the original image
-    result = cv2.addWeighted(und, 1, warped_marking, 0.3, 0)
-    test_before_after(img, result, "test_invplt.jpg")
     
