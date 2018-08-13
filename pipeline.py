@@ -11,9 +11,10 @@ def window_mask(width, height, img_ref, center,level):
     output[int(img_ref.shape[0]-(level+1)*height):int(img_ref.shape[0]-level*height),max(0,int(center-width/2)):min(int(center+width/2),img_ref.shape[1])] = 1
     return output
 
-def find_window_centroids(image, window_width, window_height, margin):
+def find_window_centroids(image, window_width, window_height, margin, minpix = 10):
     
-    window_centroids = [] # Store the (left,right) window centroid positions per level
+    window_centroids_left = [] # Store the left, window centroid positions per level
+    window_centroids_right = [] # Store the right window centroid positions per level
     window = np.ones(window_width) # Create our window template that we will use for convolutions
     
     # First find the two starting positions for the left and right lane by using np.sum to get the vertical image slice
@@ -29,7 +30,11 @@ def find_window_centroids(image, window_width, window_height, margin):
     r_center = np.argmax(np.convolve(window,r_sum))-window_width/2+int(image.shape[1]/2)
     
     # Add what we found for the first layer
-    window_centroids.append((l_center,r_center))
+    window_centroids_left.append(l_center)
+    window_centroids_right.append(r_center)
+    
+    l_shift = 0
+    r_shift = 0
     
     # Go through each layer looking for max pixel locations
     for level in range(1,(int)(image.shape[0]/window_height)):
@@ -41,37 +46,62 @@ def find_window_centroids(image, window_width, window_height, margin):
         offset = window_width/2
         l_min_index = int(max(l_center+offset-margin,0))
         l_max_index = int(min(l_center+offset+margin,image.shape[1]))
-        l_center = np.argmax(conv_signal[l_min_index:l_max_index])+l_min_index-offset
+        l_conv = conv_signal[l_min_index:l_max_index]
+        # Only change the new center if we found enough pixels
+        if np.max(l_conv) >= minpix:
+            prev_l_center = l_center
+            l_center = np.argmax(l_conv)+l_min_index-offset
+            l_shift = l_center - prev_l_center
+            window_centroids_left.append(l_center)
+            
+        else:
+            
+            l_center = int(min(max(l_center + l_shift, 0), image.shape[1]))
+            window_centroids_left.append(None)
         # Find the best right centroid by using past right center as a reference
         r_min_index = int(max(r_center+offset-margin,0))
         r_max_index = int(min(r_center+offset+margin,image.shape[1]))
-        r_center = np.argmax(conv_signal[r_min_index:r_max_index])+r_min_index-offset
-        # Add what we found for that layer
-        window_centroids.append((l_center,r_center))
+        r_conv = conv_signal[r_min_index:r_max_index]
+        # Only change the new center if we found enough pixels
+        if np.max(r_conv) >= minpix:
+            prev_r_center = r_center
+            r_center = np.argmax(r_conv)+r_min_index-offset
+            r_shift = r_center - prev_r_center
+            window_centroids_right.append(r_center)
+        else:
+            
+            r_center = int(min(max(r_center + r_shift, 0), image.shape[1]))
+            window_centroids_right.append(None)
+        
 
-    return window_centroids
+    return window_centroids_left, window_centroids_right
 
-def map_windows_to_centroids(window_centroids, window_width, window_height, warped_e):    
+def map_windows_to_centroids(window_centroids_left, window_centroids_right, window_width, window_height, warped_e):    
     # If we found any window centers
-    if len(window_centroids) > 0:
+    if len(window_centroids_left) > 0:
 
         # Points used to draw all the left and right windows
         l_points = np.zeros_like(warped_e)
         r_points = np.zeros_like(warped_e)
 
         # Go through each level and draw the windows     
-        for level in range(0,len(window_centroids)):
+        for level in range(0,len(window_centroids_left)):
             # Window_mask is a function to draw window areas
-            l_mask = window_mask(window_width,window_height,warped_e,window_centroids[level][0],level)
-            r_mask = window_mask(window_width,window_height,warped_e,window_centroids[level][1],level)
-            # Add graphic points from window mask here to total pixels found 
-            l_points[(l_points == 255) | ((l_mask == 1) ) ] = 255
-            r_points[(r_points == 255) | ((r_mask == 1) ) ] = 255
+            if (not window_centroids_left[level] is None):
+                l_mask = window_mask(window_width,window_height,warped_e,window_centroids_left[level],level)
+                # Add graphic points from window mask here to total pixels found 
+                l_points[(l_points == 255) | ((l_mask == 1) ) ] = 255
+            
+            if (not window_centroids_right[level] is None):
+                r_mask = window_mask(window_width,window_height,warped_e,window_centroids_right[level],level)
+                r_points[(r_points == 255) | ((r_mask == 1) ) ] = 255
 
         # Draw the results
-        template = np.array(r_points+l_points,np.uint8) # add both left and right window pixels together
-        zero_channel = np.zeros_like(template) # create a zero color channel
-        template = np.array(cv2.merge((zero_channel,template,zero_channel)),np.uint8) # make window pixels green
+        #template = np.array(r_points+l_points,np.uint8) # add both left and right window pixels together
+        zero_channel = np.zeros_like(r_points) # create a zero color channel
+        #template = np.array(cv2.merge((zero_channel,template,zero_channel)),np.uint8) # make window pixels green
+        
+        template = np.array(cv2.merge((zero_channel, np.array(r_points), np.array(l_points))), np.uint8)
         warpage= np.dstack((warped_e, warped_e, warped_e))*255 # making the original road pixels 3 color channels
         warpage = warpage.astype(np.uint8)
         output = cv2.addWeighted(warpage, 1, template, 0.5, 0.0) # overlay the orignal road image with window results
@@ -107,7 +137,7 @@ def sobel(fname):
     image = mpimg.imread(fname) 
     # Choose a Sobel kernel size
     ksize = 31 # Choose a larger odd number to smooth gradient measurements
-    x_thresh = (20, 100)
+    x_thresh = (5, 100)
     y_thresh = (20, 100)
     mag_t = (70, 100)
     dir_thresh = (0.2, 1.7)
@@ -121,20 +151,33 @@ def sobel(fname):
     
     combined = np.zeros_like(dir_binary)
     #combined[((gradx == 1) & (grady == 1)) | ((mag_binary == 1) & (dir_binary == 1))] = 1
-    #combined[((mag_binary == 1) & (dir_binary == 1)) | (color_grad == 1)] = 1
-    combined[((mag_binary == 1) & (dir_binary == 1))] = 1
+    #combined[((mag_binary == 1) & (dir_binary == 1))] = 1
+    #combined[(((mag_binary == 1) & (dir_binary == 1)) | (color_grad == 1))] = 1
     
+    combined[(color_grad == 1) & (gradx == 1)] = 1
+    
+    
+    #return color_grad
     return combined
     
-def sobel_color(image, s_thresh=(170, 255)):
+def sobel_color(image, s_thresh=(100, 255), h_thresh = (0, 255), rgb_min = 200):
     hls = cv2.cvtColor(image, cv2.COLOR_RGB2HLS)
     s_channel = hls[:,:,2]
+    h_channel = hls[:,:,0]
     
     # Threshold color channel
     s_binary = np.zeros_like(s_channel)
-    s_binary[(s_channel >= s_thresh[0]) & (s_channel <= s_thresh[1])] = 1
+    s_binary[(s_channel >= s_thresh[0]) & (s_channel <= s_thresh[1]) 
+    & (h_channel >= h_thresh[0]) & (h_channel <= h_thresh[1])] = 1
+    
+    print(np.max(image[:,:,1]))
+    is_white = np.zeros_like(s_channel)
+    is_white[(image[:,:,0] > rgb_min) & (image[:,:,1] > rgb_min) & (image[:,:,2] > rgb_min)] = 1
+    
+    color_combo = np.zeros_like(s_channel)
+    color_combo [(is_white == 1) | (s_binary == 1)] = 1
 
-    return s_binary
+    return color_combo
     
 
 def sobel_abs_axis(img, orient='x', sobel_kernel=3, thresh=(0, 255)):
@@ -204,12 +247,13 @@ def getCalibrationPoints(fname):
     
     return (None, None)
     
-def fitPolynomial(window_centroids, window_height):
-    left_x = [c[0] for c in window_centroids]
-    left_y = [i*window_height + window_height/2 for i in range(len(left_x))]
+def fitPolynomial(window_centroids_left, window_centroids_right, window_height):
+    N = len(window_centroids_left)
+    left_x = [c for c in window_centroids_left if c is not None ]
+    left_y = [(N-i)*window_height + window_height/2 for i in range(len(window_centroids_left)) if window_centroids_left[i] is not None]
     
-    right_x = [c[1] for c in window_centroids]
-    right_y = left_y
+    right_x = [c for c in window_centroids_right if c is not None ]
+    right_y = [(N-i)*window_height + window_height/2 for i in range(len(window_centroids_right)) if window_centroids_right[i] is not None]
     
     left_fit = np.polyfit(left_y, left_x, 2)
     right_fit = np.polyfit(right_y, right_x, 2)
@@ -251,12 +295,30 @@ def run_pipeline(objectPoints, imagePoints, M, Minv, fname):
     img_size = (und.shape[1], und.shape[0])
     warped = cv2.warpPerspective(img, M, img_size, flags=cv2.INTER_NEAREST)
     warped_e = cv2.warpPerspective(edges, M, img_size, flags=cv2.INTER_NEAREST)
-
+    #test_before_after(warped_e, warped_e, "warped_sobel.jpg", convert=False)
+    
     print("detect lanes in warped space")
-    window_centroids = find_window_centroids(warped_e, window_width, window_height, margin)
-    left_fit, right_fit = fitPolynomial(window_centroids, window_height)
-    output = map_windows_to_centroids(window_centroids, window_width, window_height, warped_e)
-    test_before_after(warped, output, prefix + "detect.jpg")
+    window_centroids_left, window_centroids_right = find_window_centroids(warped_e, window_width, window_height, margin)
+    left_fit, right_fit = fitPolynomial(window_centroids_left, window_centroids_right, window_height)
+    output = map_windows_to_centroids(window_centroids_left, window_centroids_right, window_width, window_height, warped_e)
+    
+    ploty = np.linspace(0, warped_e.shape[0]-1, warped_e.shape[0] )
+    left_fitx = left_fit[0]*ploty**2 + left_fit[1]*ploty + left_fit[2]     
+    right_fitx = right_fit[0]*ploty**2 + right_fit[1]*ploty + right_fit[2]  
+    
+    img_before = cv2.cvtColor(warped, cv2.COLOR_BGR2RGB)
+    img_after = cv2.cvtColor(output, cv2.COLOR_BGR2RGB)
+    f, (ax1, ax2) = plt.subplots(1, 2, figsize=(24, 9))
+    f.tight_layout()
+    ax1.imshow(img_before)
+    # Plots the left and right polynomials on the lane lines
+    plt.plot(left_fitx, ploty, color='yellow')
+    plt.plot(right_fitx, ploty, color='yellow')
+    ax1.set_title('Original Image', fontsize=50)
+    ax2.imshow(img_after)
+    ax2.set_title('Undistorted Image', fontsize=50)
+    plt.subplots_adjust(left=0., right=1, top=0.9, bottom=0.)
+    plt.savefig(prefix + "detect.jpg")
 
     print("mark lanes")
     warped_marking = markLanes(img, warped_e, Minv, left_fit, right_fit)
@@ -273,8 +335,14 @@ if __name__ == "__main__":
     
 
     # Various points for the transformation. The closer ones are listed first
-    transform_src = np.array([[250, 680], [535, 490], [752, 490], [1058, 680]], np.float32)
-    transform_dst = np.array([[250, 680], [250, 490], [1058, 490], [1058, 680]], np.float32)
+    #transform_src = np.array([[250, 680], [434, 550], [860, 550], [1080, 680]], np.float32)
+    #transform_dst = np.array([[250, 680], [250, 550], [1080, 550], [1080, 680]], np.float32)
+    
+    #transform_src = np.array([[250, 680], [535, 490], [752, 490], [1058, 680]], np.float32)
+    #transform_dst = np.array([[250, 680], [250, 490], [1058, 490], [1058, 680]], np.float32)
+    
+    transform_src = np.array([[256, 678], [564, 472], [722, 472], [1054, 678]], np.float32)
+    transform_dst = np.array([[256, 678], [256, 472], [1054, 472], [1054, 678]], np.float32)
     
     #transform_src = np.array([[250, 680], [593, 450], [687, 450], [1058, 680]], np.float32)
     #transform_dst = np.array([[250, 680], [250, 450], [1058, 450], [1058, 680]], np.float32)
@@ -313,6 +381,8 @@ if __name__ == "__main__":
     Minv = cv2.getPerspectiveTransform(transform_dst, transform_src)
     
     for f in os.listdir(test_dir):
+        #if (not "test1" in f):
+        #    continue
         print ("Detecting lanes in " + f)
         if not f.endswith("jpg"):
             continue
