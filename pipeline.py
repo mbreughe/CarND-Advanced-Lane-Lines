@@ -160,7 +160,7 @@ def sobel(fname):
     #return color_grad
     return combined
     
-def sobel_color(image, s_thresh=(100, 255), h_thresh = (0, 255), rgb_min = 200):
+def sobel_color(image, s_thresh=(70, 255), h_thresh = (0, 255), rgb_min = 200):
     hls = cv2.cvtColor(image, cv2.COLOR_RGB2HLS)
     s_channel = hls[:,:,2]
     h_channel = hls[:,:,0]
@@ -250,10 +250,10 @@ def getCalibrationPoints(fname):
 def fitPolynomial(window_centroids_left, window_centroids_right, window_height):
     N = len(window_centroids_left)
     left_x = [c for c in window_centroids_left if c is not None ]
-    left_y = [(N-i)*window_height + window_height/2 for i in range(len(window_centroids_left)) if window_centroids_left[i] is not None]
+    left_y = [(N-1-i)*window_height + window_height/2 for i in range(len(window_centroids_left)) if window_centroids_left[i] is not None]
     
     right_x = [c for c in window_centroids_right if c is not None ]
-    right_y = [(N-i)*window_height + window_height/2 for i in range(len(window_centroids_right)) if window_centroids_right[i] is not None]
+    right_y = [(N-1-i)*window_height + window_height/2 for i in range(len(window_centroids_right)) if window_centroids_right[i] is not None]
     
     left_fit = np.polyfit(left_y, left_x, 2)
     right_fit = np.polyfit(right_y, right_x, 2)
@@ -276,7 +276,7 @@ def test_before_after(img_before, img_after, ofname, convert = True):
 def run_pipeline(objectPoints, imagePoints, M, Minv, fname):
     # window settings
     window_width = 50 
-    window_height = 80 # Break image into 9 vertical layers since image height is 720
+    window_height = 60 # Break image into 9 vertical layers since image height is 720
     margin = 75 # How much to slide left and right for searching
     prefix = os.path.basename(fname).replace('.jpg', '') + "_"
 
