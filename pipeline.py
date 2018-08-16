@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pickle
 import matplotlib.image as mpimg
+from moviepy.editor import VideoFileClip
 
 def window_mask(width, height, img_ref, center,level):
     output = np.zeros_like(img_ref)
@@ -133,8 +134,8 @@ def markLanes(img, warped_e, Minv, left_fit, right_fit):
     return newwarp
     
 
-def sobel(fname):
-    image = mpimg.imread(fname) 
+def sobel(image):
+     
     # Choose a Sobel kernel size
     ksize = 31 # Choose a larger odd number to smooth gradient measurements
     x_thresh = (5, 100)
@@ -170,7 +171,6 @@ def sobel_color(image, s_thresh=(70, 255), h_thresh = (0, 255), rgb_min = 200):
     s_binary[(s_channel >= s_thresh[0]) & (s_channel <= s_thresh[1]) 
     & (h_channel >= h_thresh[0]) & (h_channel <= h_thresh[1])] = 1
     
-    print(np.max(image[:,:,1]))
     is_white = np.zeros_like(s_channel)
     is_white[(image[:,:,0] > rgb_min) & (image[:,:,1] > rgb_min) & (image[:,:,2] > rgb_min)] = 1
     
@@ -260,7 +260,7 @@ def fitPolynomial(window_centroids_left, window_centroids_right, window_height):
     
     return (left_fit, right_fit)
     
-def test_before_after(img_before, img_after, ofname, convert = True):
+def test_before_after(img_before, img_after, ofname, convert = False):
     if convert:
         img_before = cv2.cvtColor(img_before, cv2.COLOR_BGR2RGB)
         img_after = cv2.cvtColor(img_after, cv2.COLOR_BGR2RGB)
@@ -273,67 +273,74 @@ def test_before_after(img_before, img_after, ofname, convert = True):
     plt.subplots_adjust(left=0., right=1, top=0.9, bottom=0.)
     plt.savefig(ofname)
     
-def run_pipeline(objectPoints, imagePoints, M, Minv, fname):
+def run_pipeline(objectPoints, imagePoints, M, Minv, image, verbose=False, ofname_prefix=None):
+    if verbose and ofname_prefix is None:
+        print("Warning: asking for verbose output, but no prefix is given. Skipping verbose mode...")
+        verbose = False
+    
+    prefix = ofname_prefix
+
     # window settings
     window_width = 50 
     window_height = 60 # Break image into 9 vertical layers since image height is 720
     margin = 75 # How much to slide left and right for searching
-    prefix = os.path.basename(fname).replace('.jpg', '') + "_"
 
-    print("Undistort")
-    img = cv2.imread(fname)
-    und = undistort(img, objectPoints, imagePoints)
+    # Undistort
+    und = undistort(image, objectPoints, imagePoints)
     
-    print("Sobel")
-    edges = sobel(fname)
-    c_edges = np.dstack(( np.zeros_like(edges), edges, np.zeros_like(edges))) * 255
-    c_edges = c_edges.astype(np.uint8)
-    combined = c_edges | img
-    test_before_after(img, combined, prefix + "sobel.jpg")
+    # Sobel
+    edges = sobel(image)
     
-    print("warp perspective")
+    if verbose:
+        c_edges = np.dstack(( np.zeros_like(edges), edges, np.zeros_like(edges))) * 255
+        c_edges = c_edges.astype(np.uint8)
+        combined = c_edges | image
+        test_before_after(image, combined, prefix + "sobel.jpg")
+    
+    # warp perspective
     img_size = (und.shape[1], und.shape[0])
-    warped = cv2.warpPerspective(img, M, img_size, flags=cv2.INTER_NEAREST)
     warped_e = cv2.warpPerspective(edges, M, img_size, flags=cv2.INTER_NEAREST)
-    #test_before_after(warped_e, warped_e, "warped_sobel.jpg", convert=False)
     
-    print("detect lanes in warped space")
+    # detect lanes in warped space
     window_centroids_left, window_centroids_right = find_window_centroids(warped_e, window_width, window_height, margin)
     left_fit, right_fit = fitPolynomial(window_centroids_left, window_centroids_right, window_height)
-    output = map_windows_to_centroids(window_centroids_left, window_centroids_right, window_width, window_height, warped_e)
-    
-    ploty = np.linspace(0, warped_e.shape[0]-1, warped_e.shape[0] )
-    left_fitx = left_fit[0]*ploty**2 + left_fit[1]*ploty + left_fit[2]     
-    right_fitx = right_fit[0]*ploty**2 + right_fit[1]*ploty + right_fit[2]  
-    
-    img_before = cv2.cvtColor(warped, cv2.COLOR_BGR2RGB)
-    img_after = cv2.cvtColor(output, cv2.COLOR_BGR2RGB)
-    f, (ax1, ax2) = plt.subplots(1, 2, figsize=(24, 9))
-    f.tight_layout()
-    ax1.imshow(img_before)
-    # Plots the left and right polynomials on the lane lines
-    plt.plot(left_fitx, ploty, color='yellow')
-    plt.plot(right_fitx, ploty, color='yellow')
-    ax1.set_title('Original Image', fontsize=50)
-    ax2.imshow(img_after)
-    ax2.set_title('Undistorted Image', fontsize=50)
-    plt.subplots_adjust(left=0., right=1, top=0.9, bottom=0.)
-    plt.savefig(prefix + "detect.jpg")
 
-    print("mark lanes")
-    warped_marking = markLanes(img, warped_e, Minv, left_fit, right_fit)
+    # Plots the warped road, along with detected lanes and the mapped polynomials along them
+    if verbose:
+        # Plot warped road
+        warped = cv2.warpPerspective(image, M, img_size, flags=cv2.INTER_NEAREST)
+        f, (ax1, ax2) = plt.subplots(1, 2, figsize=(24, 9))
+        f.tight_layout()
+        ax1.imshow(warped)
+        
+        # Plot polynomials
+        ploty = np.linspace(0, warped_e.shape[0]-1, warped_e.shape[0] )
+        left_fitx = left_fit[0]*ploty**2 + left_fit[1]*ploty + left_fit[2]     
+        right_fitx = right_fit[0]*ploty**2 + right_fit[1]*ploty + right_fit[2]
+        plt.plot(left_fitx, ploty, color='yellow')
+        plt.plot(right_fitx, ploty, color='yellow')
+        ax1.set_title('Original Image', fontsize=50)
+        
+        # Plot detected lanes
+        output = map_windows_to_centroids(window_centroids_left, window_centroids_right, window_width, window_height, warped_e)
+        ax2.imshow(output)
+        ax2.set_title('Undistorted Image', fontsize=50)
+        plt.subplots_adjust(left=0., right=1, top=0.9, bottom=0.)
+        plt.savefig(prefix + "detect.jpg")
+
+    # mark lanes
+    warped_marking = markLanes(image, warped_e, Minv, left_fit, right_fit)
     # Combine the result with the original image
     result = cv2.addWeighted(und, 1, warped_marking, 0.3, 0)
-    test_before_after(img, result, prefix + "invplt.jpg")
     
-
-
-if __name__ == "__main__":
-    cal_dir = "camera_cal"
-    cal_save = "cal_data.p"
-    test_dir = "test_images"
+    if verbose:
+        test_before_after(image, result, prefix + "invplt.jpg")
     
-
+    plt.close('all')
+    
+    return result
+    
+def get_calibration_data(cal_dir, cal_save):
     # Various points for the transformation. The closer ones are listed first
     #transform_src = np.array([[250, 680], [434, 550], [860, 550], [1080, 680]], np.float32)
     #transform_dst = np.array([[250, 680], [250, 550], [1080, 550], [1080, 680]], np.float32)
@@ -349,8 +356,6 @@ if __name__ == "__main__":
     
     #transform_src = np.array([[250, 680], [624, 431], [655, 431], [1058, 680]], np.float32)
     #transform_dst = np.array([[250, 680], [250, 431], [1058, 431], [1058, 680]], np.float32
-    
-    
     
     print("Getting calibration points")
     # Collect calibration points
@@ -380,13 +385,47 @@ if __name__ == "__main__":
     M = cv2.getPerspectiveTransform(transform_src, transform_dst)
     Minv = cv2.getPerspectiveTransform(transform_dst, transform_src)
     
+    return (objectPoints, imagePoints, M, Minv)
+    
+def test_pipeline(cal_dir, cal_save, test_dir = "test_images"):
+    (objectPoints, imagePoints, M, Minv) = get_calibration_data(cal_dir, cal_save)
+    
     for f in os.listdir(test_dir):
-        #if (not "test1" in f):
-        #    continue
-        print ("Detecting lanes in " + f)
         if not f.endswith("jpg"):
             continue
+        print ("Detecting lanes in " + f)
         fname = os.path.join(test_dir, f)
-        run_pipeline(objectPoints, imagePoints, M, Minv, fname)
+        image = mpimg.imread(fname)
+        prefix = os.path.basename(fname).replace('.jpg', '') + "_"
+        result = run_pipeline(objectPoints, imagePoints, M, Minv, image, True, prefix)
+
+    
+def process_image(image):
+    return run_pipeline(g_objectPoints, g_imagePoints, g_M, g_Minv, image, verbose=False)
+    
+def process_video(video_fname):
+    # Need to define globals as VideoFileClip.fl_image only accepts one parameter
+    global g_objectPoints
+    global g_imagePoints
+    global g_M
+    global g_Minv
+    (g_objectPoints, g_imagePoints, g_M, g_Minv) = get_calibration_data(cal_dir, cal_save)
+    
+    clip = VideoFileClip(video_fname)
+    out_clip = clip.fl_image(process_image)
+    out_clip.write_videofile('output.mp4', audio=False)
+    #clip.save_frame("additional/frame.jpeg", t='00:00:38')
+
+
+if __name__ == "__main__":
+    cal_dir = "camera_cal"
+    cal_save = "cal_data.p"
+    
+    video_fname = "project_video.mp4"
+    
+    #test_pipeline(cal_dir, cal_save)
+    process_video(video_fname)
+    
+    
     
     
