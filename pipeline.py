@@ -8,7 +8,6 @@ import matplotlib.image as mpimg
 from moviepy.editor import VideoFileClip
 
 curvatures = list()
-frame_no = 0
 
 
 def window_mask(width, height, img_ref, center,level):
@@ -292,8 +291,9 @@ def calcCurvature(left_fit_real, right_fit_real, y_eval):
     
     return(left_curverad, left_curverad)
     
-def run_pipeline(objectPoints, imagePoints, M, Minv, image, verbose=False, ofname_prefix=None):
-    global frame_no
+def run_pipeline(objectPoints, imagePoints, M, Minv, image, max_frames, verbose=False, ofname_prefix=None):
+    global running_tot 
+    
     if verbose and ofname_prefix is None:
         print("Warning: asking for verbose output, but no prefix is given. Skipping verbose mode...")
         verbose = False
@@ -361,31 +361,45 @@ def run_pipeline(objectPoints, imagePoints, M, Minv, image, verbose=False, ofnam
     
     left_curverad, right_curverad = calcCurvature(left_fit_real, right_fit_real, max_y)
     
-    #cv2.putText(result, "Curvature: {}".format(left_curverad), (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (250, 80, 0), lineType=cv2.LINE_AA)
+    
 
-    # Make a random plot...
-    fig = plt.figure(figsize=(8,1.5))
-    fig.add_subplot(111)
-
-    left_curvatures[frame_no] = left_curverad
-    right_curvatures[frame_no] = right_curverad
-
-    plt.plot(left_curvatures)
+    left_curvatures.append(left_curverad)
+    right_curvatures.append(right_curverad)
+    
+    avg_wind = 30
+    num_frames = len(left_curvatures)
+    running_tot += (left_curverad + right_curverad)/2
+    
+    if num_frames > avg_wind:       
+        running_tot -= (left_curvatures[-(avg_wind+1)] + right_curvatures[-(avg_wind+1)])/2
+    
+    cur_running_avg = running_tot/min(avg_wind, num_frames)
+    running_avgs.append(cur_running_avg)
+    
+    f, ax = plt.subplots(1, figsize=(8,1.5))
+    #ax = axs[0]
+    ax.figsize=(8,1.5)
+    ax.set_xlim([0, max_frames])
+    ax.set_ylim([0, 3000])
+    
     plt.plot(right_curvatures)
-    fig.canvas.draw()
+    plt.plot(running_avgs)
+    ax.figure.canvas.draw()
 
     # Now we can save it to a numpy array.
-    data = np.fromstring(fig.canvas.tostring_rgb(), dtype=np.uint8, sep='')
-    data = data.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+    data = np.fromstring(ax.figure.canvas.tostring_rgb(), dtype=np.uint8, sep='')
+    data = data.reshape(ax.figure.canvas.get_width_height()[::-1] + (3,))
     
     result[0:data.shape[0], 0:data.shape[1], :] = data
+    
+    result[data.shape[0]:data.shape[0]+100, : data.shape[1],:] = 255 
+    
+    cv2.putText(result, "Curvature: {} m".format(int(cur_running_avg)), (30, 200), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (250, 80, 0), lineType=cv2.LINE_AA)
     
     if verbose:
         test_before_after(image, result, prefix + "invplt.jpg")
     
     plt.close('all')
-    
-    frame_no += 1
     
     return result
     
@@ -437,7 +451,7 @@ def get_calibration_data(cal_dir, cal_save):
     return (objectPoints, imagePoints, M, Minv)
     
 def test_pipeline(cal_dir, cal_save, test_dir = "test_images"):
-    init_curvatures(len(os.listdir(test_dir)))
+    init_curvatures()
     (objectPoints, imagePoints, M, Minv) = get_calibration_data(cal_dir, cal_save)
     
     for f in os.listdir(test_dir):
@@ -447,23 +461,22 @@ def test_pipeline(cal_dir, cal_save, test_dir = "test_images"):
         fname = os.path.join(test_dir, f)
         image = mpimg.imread(fname)
         prefix = os.path.basename(fname).replace('.jpg', '') + "_"
-        result = run_pipeline(objectPoints, imagePoints, M, Minv, image, True, prefix)
+        result = run_pipeline(objectPoints, imagePoints, M, Minv, image, len(os.listdir(test_dir)), True, prefix)
 
     
 def process_image(image):
-    return run_pipeline(g_objectPoints, g_imagePoints, g_M, g_Minv, image, verbose=False)
+    return run_pipeline(g_objectPoints, g_imagePoints, g_M, g_Minv, image, g_max_frames, verbose=False)
     
-def init_curvatures(number_of_frames):
+def init_curvatures():
     global left_curvatures
     global right_curvatures
+    global running_tot
+    global running_avgs
     
-    big_neg = -50
-   
-    #left_curvatures = big_neg * np.ones(number_of_frames)
-    #right_curvatures = big_neg * np.ones(number_of_frames)
-    
-    left_curvatures = np.zeros(number_of_frames)
-    right_curvatures = np.zeros(number_of_frames)
+    left_curvatures = []
+    right_curvatures = []
+    running_avgs = []
+    running_tot = 0
       
 def process_video(video_fname):
     # Need to define globals as VideoFileClip.fl_image only accepts one parameter
@@ -471,12 +484,15 @@ def process_video(video_fname):
     global g_imagePoints
     global g_M
     global g_Minv
+    global g_max_frames
     (g_objectPoints, g_imagePoints, g_M, g_Minv) = get_calibration_data(cal_dir, cal_save)
 
-    clip = VideoFileClip(video_fname).cutout(4,51)
-    init_curvatures(int(clip.fps * (clip.duration+1)))
+    
+    init_curvatures()
+    clip = VideoFileClip(video_fname)
+    g_max_frames = clip.fps * (clip.duration+1)
     out_clip = clip.fl_image(process_image)
-    out_clip.write_videofile('output_take3.mp4', audio=False)
+    out_clip.write_videofile('output_take4.mp4', audio=False)
     #for i in np.linspace(1,2,30):
     #    clip.save_frame("additional/frame_{}.jpg".format(i), t='00:00:{}'.format(i))
 
@@ -487,8 +503,8 @@ if __name__ == "__main__":
     
     video_fname = "project_video.mp4"
     
-    test_pipeline(cal_dir, cal_save)
-    #process_video(video_fname)
+    #test_pipeline(cal_dir, cal_save)
+    process_video(video_fname)
     
     
     
