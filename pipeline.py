@@ -263,6 +263,13 @@ class LaneDetector:
     transform_src = np.array([[256, 678], [564, 472], [722, 472], [1054, 678]], np.float32)
     transform_dst = np.array([[256, 678], [256, 472], [1054, 472], [1054, 678]], np.float32)
     
+    # Search window settings
+    window_width = 50 
+    window_height = 60 # Break image into 9 vertical layers since image height is 720
+    margin = 75 # How much to slide left and right for searching
+    
+    avg_wind = 30
+    
     cal_save = "cal_data.p"
     
     def __init__(self, max_frames, cal_dir):
@@ -339,84 +346,33 @@ class LaneDetector:
         left_fit_real = np.polyfit(left_y_real, left_x_real, 2)
         right_fit_real = np.polyfit(right_y_real, right_x_real, 2)
         
-        return (left_fit, right_fit, left_fit_real, right_fit_real, min(max(left_y_real), max(right_y_real)))   
+        return (left_fit, right_fit, left_fit_real, right_fit_real, min(max(left_y_real), max(right_y_real)))  
 
+    def plot_polynomials_in_warp_space(self, image, warped_e, window_centroids_left, window_centroids_right, left_fit, right_fit, ofname):
+        img_size = (image.shape[1], image.shape[0])
+        
+        # Plot warped road
+        warped = cv2.warpPerspective(image, self.M, img_size, flags=cv2.INTER_NEAREST)
+        f, (ax1, ax2) = plt.subplots(1, 2, figsize=(24, 9))
+        f.tight_layout()
+        ax1.imshow(warped)
+        
+        # Plot polynomials
+        ploty = np.linspace(0, warped_e.shape[0]-1, warped_e.shape[0] )
+        left_fitx = left_fit[0]*ploty**2 + left_fit[1]*ploty + left_fit[2]     
+        right_fitx = right_fit[0]*ploty**2 + right_fit[1]*ploty + right_fit[2]
+        plt.plot(left_fitx, ploty, color='yellow')
+        plt.plot(right_fitx, ploty, color='yellow')
+        ax1.set_title('Original Image', fontsize=50)
+        
+        # Plot detected lanes
+        output = map_windows_to_centroids(window_centroids_left, window_centroids_right, self.window_width, self.window_height, warped_e)
+        ax2.imshow(output)
+        ax2.set_title('Undistorted Image', fontsize=50)
+        plt.subplots_adjust(left=0., right=1, top=0.9, bottom=0.)
+        plt.savefig(ofname)        
 
-    def run_pipeline(self, image, verbose=False, ofname_prefix=None):
-        if verbose and ofname_prefix is None:
-            print("Warning: asking for verbose output, but no prefix is given. Skipping verbose mode...")
-            verbose = False
-        
-        prefix = ofname_prefix
-
-        # window settings
-        window_width = 50 
-        window_height = 60 # Break image into 9 vertical layers since image height is 720
-        margin = 75 # How much to slide left and right for searching
-
-        # Undistort
-        und = undistort(image, self.objectPoints, self.imagePoints)
-        
-        # Sobel
-        edges = sobel(image)
-        
-        if verbose:
-            c_edges = np.dstack(( np.zeros_like(edges), edges, np.zeros_like(edges))) * 255
-            c_edges = c_edges.astype(np.uint8)
-            combined = c_edges | image
-            test_before_after(image, combined, prefix + "sobel.jpg")
-        
-        # warp perspective
-        img_size = (und.shape[1], und.shape[0])
-        warped_e = cv2.warpPerspective(edges, self.M, img_size, flags=cv2.INTER_NEAREST)
-        
-        # detect lanes in warped space
-        window_centroids_left, window_centroids_right = find_window_centroids(warped_e, window_width, window_height, margin)
-        left_fit, right_fit, left_fit_real, right_fit_real, max_y = self.fitPolynomial(window_centroids_left, window_centroids_right, window_height)
-
-        # Plots the warped road, along with detected lanes and the mapped polynomials along them
-        if verbose:
-            # Plot warped road
-            warped = cv2.warpPerspective(image, self.M, img_size, flags=cv2.INTER_NEAREST)
-            f, (ax1, ax2) = plt.subplots(1, 2, figsize=(24, 9))
-            f.tight_layout()
-            ax1.imshow(warped)
-            
-            # Plot polynomials
-            ploty = np.linspace(0, warped_e.shape[0]-1, warped_e.shape[0] )
-            left_fitx = left_fit[0]*ploty**2 + left_fit[1]*ploty + left_fit[2]     
-            right_fitx = right_fit[0]*ploty**2 + right_fit[1]*ploty + right_fit[2]
-            plt.plot(left_fitx, ploty, color='yellow')
-            plt.plot(right_fitx, ploty, color='yellow')
-            ax1.set_title('Original Image', fontsize=50)
-            
-            # Plot detected lanes
-            output = map_windows_to_centroids(window_centroids_left, window_centroids_right, window_width, window_height, warped_e)
-            ax2.imshow(output)
-            ax2.set_title('Undistorted Image', fontsize=50)
-            plt.subplots_adjust(left=0., right=1, top=0.9, bottom=0.)
-            plt.savefig(prefix + "detect.jpg")
-
-        # mark lanes
-        warped_marking = markLanes(image, warped_e, self.Minv, left_fit, right_fit)
-        # Combine the result with the original image
-        result = cv2.addWeighted(und, 1, warped_marking, 0.3, 0)
-        
-        left_curverad, right_curverad = calcCurvature(left_fit_real, right_fit_real, max_y)
-        
-        self.left_curvatures.append(left_curverad)
-        self.right_curvatures.append(right_curverad)
-        
-        avg_wind = 30
-        num_frames = len(self.left_curvatures)
-        self.running_tot += (left_curverad + right_curverad)/2
-        
-        if num_frames > avg_wind:       
-            self.running_tot -= (self.left_curvatures[-(avg_wind+1)] + self.right_curvatures[-(avg_wind+1)])/2
-        
-        cur_running_avg = self.running_tot/min(avg_wind, num_frames)
-        self.running_avgs.append(cur_running_avg)
-        
+    def addHUD(self, result):
         f, ax = plt.subplots(1, figsize=(8,1.5))
         #ax = axs[0]
         ax.figsize=(8,1.5)
@@ -435,8 +391,66 @@ class LaneDetector:
         
         result[data.shape[0]:data.shape[0]+100, : data.shape[1],:] = 255 
         
-        cv2.putText(result, "Curvature: {} m".format(int(cur_running_avg)), (30, 200), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (250, 80, 0), lineType=cv2.LINE_AA)
+        cv2.putText(result, "Curvature: {} m".format(int(self.cur_running_avg)), (30, 200), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (250, 80, 0), lineType=cv2.LINE_AA)
         
+        return result
+        
+    def updateCurvatures(self, left_curverad, right_curverad):
+        self.left_curvatures.append(left_curverad)
+        self.right_curvatures.append(right_curverad)
+      
+        num_frames = len(self.left_curvatures)
+        self.running_tot += (left_curverad + right_curverad)/2
+        
+        if num_frames > self.avg_wind:       
+            self.running_tot -= (self.left_curvatures[-(self.avg_wind+1)] + self.right_curvatures[-(self.avg_wind+1)])/2
+        
+        self.cur_running_avg = self.running_tot/min(self.avg_wind, num_frames)
+        self.running_avgs.append(self.cur_running_avg)
+        
+        
+    def run_pipeline(self, image, verbose=False, ofname_prefix=None):
+        if verbose and ofname_prefix is None:
+            print("Warning: asking for verbose output, but no prefix is given. Skipping verbose mode...")
+            verbose = False
+        
+        prefix = ofname_prefix
+
+        # Undistort
+        und = undistort(image, self.objectPoints, self.imagePoints)
+        
+        # Sobel
+        edges = sobel(und)
+        
+        if verbose:
+            c_edges = np.dstack(( np.zeros_like(edges), edges, np.zeros_like(edges))) * 255
+            c_edges = c_edges.astype(np.uint8)
+            combined = c_edges | image
+            test_before_after(image, combined, prefix + "sobel.jpg")
+        
+        # warp perspective
+        img_size = (und.shape[1], und.shape[0])
+        warped_e = cv2.warpPerspective(edges, self.M, img_size, flags=cv2.INTER_NEAREST)
+        
+        # detect lanes in warped space
+        window_centroids_left, window_centroids_right = find_window_centroids(warped_e, self.window_width, self.window_height, self.margin)
+        left_fit, right_fit, left_fit_real, right_fit_real, max_y = self.fitPolynomial(window_centroids_left, window_centroids_right, self.window_height)
+
+        # Plots the warped road, along with detected lanes and the mapped polynomials along them
+        if verbose:
+            self.plot_polynomials_in_warp_space(image, warped_e, window_centroids_left, window_centroids_right, left_fit, right_fit, prefix + "detect.jpg")
+
+        # mark lanes
+        warped_marking = markLanes(image, warped_e, self.Minv, left_fit, right_fit)
+        
+        # Combine the result with the original image
+        result = cv2.addWeighted(und, 1, warped_marking, 0.3, 0)
+        
+        left_curverad, right_curverad = calcCurvature(left_fit_real, right_fit_real, max_y)
+        self.updateCurvatures(left_curverad, right_curverad)
+   
+        result = self.addHUD(result)
+
         if verbose:
             test_before_after(image, result, prefix + "invplt.jpg")
         
