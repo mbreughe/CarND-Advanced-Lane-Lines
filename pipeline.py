@@ -7,6 +7,10 @@ import pickle
 import matplotlib.image as mpimg
 from moviepy.editor import VideoFileClip
 
+curvatures = list()
+frame_no = 0
+
+
 def window_mask(width, height, img_ref, center,level):
     output = np.zeros_like(img_ref)
     output[int(img_ref.shape[0]-(level+1)*height):int(img_ref.shape[0]-level*height),max(0,int(center-width/2)):min(int(center+width/2),img_ref.shape[1])] = 1
@@ -113,8 +117,8 @@ def map_windows_to_centroids(window_centroids_left, window_centroids_right, wind
     
     return output
     
-def markLanes(img, warped_e, Minv, left_fit, right_fit):
-    ploty = np.linspace(0, warped_e.shape[0]-1, warped_e.shape[0] )
+def markLanes(img, warped_e, Minv, left_fit, right_fit, height_frac = 0.7):
+    ploty = np.linspace(int((1-height_frac) * warped_e.shape[0]), warped_e.shape[0]-1, int(height_frac * warped_e.shape[0]) )
     left_fitx = left_fit[0]*ploty**2 + left_fit[1]*ploty + left_fit[2]      # (720,)
     right_fitx = right_fit[0]*ploty**2 + right_fit[1]*ploty + right_fit[2]  # (720,2)
     warp_zero = np.zeros_like(warped_e).astype(np.uint8)
@@ -258,7 +262,15 @@ def fitPolynomial(window_centroids_left, window_centroids_right, window_height):
     left_fit = np.polyfit(left_y, left_x, 2)
     right_fit = np.polyfit(right_y, right_x, 2)
     
-    return (left_fit, right_fit)
+    left_x_real = [i * xm_per_pix for i in left_x]
+    right_x_real = [i * xm_per_pix for i in right_x]
+    left_y_real = [i * ym_per_pix for i in left_y]
+    right_y_real = [i * ym_per_pix for i in right_y]
+    
+    left_fit_real = np.polyfit(left_y_real, left_x_real, 2)
+    right_fit_real = np.polyfit(right_y_real, right_x_real, 2)
+    
+    return (left_fit, right_fit, left_fit_real, right_fit_real, min(max(left_y_real), max(right_y_real)))
     
 def test_before_after(img_before, img_after, ofname, convert = False):
     if convert:
@@ -272,8 +284,16 @@ def test_before_after(img_before, img_after, ofname, convert = False):
     ax2.set_title('Undistorted Image', fontsize=50)
     plt.subplots_adjust(left=0., right=1, top=0.9, bottom=0.)
     plt.savefig(ofname)
+
+def calcCurvature(left_fit_real, right_fit_real, y_eval):
+    # Calculation of R_curve (radius of curvature)
+    left_curverad = ((1 + (2*left_fit_real[0]*y_eval*ym_per_pix + left_fit_real[1])**2)**1.5) / np.absolute(2*left_fit_real[0])
+    right_curverad = ((1 + (2*right_fit_real[0]*y_eval*ym_per_pix + right_fit_real[1])**2)**1.5) / np.absolute(2*right_fit_real[0])
+    
+    return(left_curverad, left_curverad)
     
 def run_pipeline(objectPoints, imagePoints, M, Minv, image, verbose=False, ofname_prefix=None):
+    global frame_no
     if verbose and ofname_prefix is None:
         print("Warning: asking for verbose output, but no prefix is given. Skipping verbose mode...")
         verbose = False
@@ -284,6 +304,12 @@ def run_pipeline(objectPoints, imagePoints, M, Minv, image, verbose=False, ofnam
     window_width = 50 
     window_height = 60 # Break image into 9 vertical layers since image height is 720
     margin = 75 # How much to slide left and right for searching
+    
+    # meters per pixel
+    global ym_per_pix
+    global xm_per_pix
+    ym_per_pix = 3/50 # meters per pixel in y dimension
+    xm_per_pix = 3.7/800 # meters per pixel in x dimension
 
     # Undistort
     und = undistort(image, objectPoints, imagePoints)
@@ -303,7 +329,7 @@ def run_pipeline(objectPoints, imagePoints, M, Minv, image, verbose=False, ofnam
     
     # detect lanes in warped space
     window_centroids_left, window_centroids_right = find_window_centroids(warped_e, window_width, window_height, margin)
-    left_fit, right_fit = fitPolynomial(window_centroids_left, window_centroids_right, window_height)
+    left_fit, right_fit, left_fit_real, right_fit_real, max_y = fitPolynomial(window_centroids_left, window_centroids_right, window_height)
 
     # Plots the warped road, along with detected lanes and the mapped polynomials along them
     if verbose:
@@ -333,10 +359,33 @@ def run_pipeline(objectPoints, imagePoints, M, Minv, image, verbose=False, ofnam
     # Combine the result with the original image
     result = cv2.addWeighted(und, 1, warped_marking, 0.3, 0)
     
+    left_curverad, right_curverad = calcCurvature(left_fit_real, right_fit_real, max_y)
+    
+    #cv2.putText(result, "Curvature: {}".format(left_curverad), (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (250, 80, 0), lineType=cv2.LINE_AA)
+
+    # Make a random plot...
+    fig = plt.figure(figsize=(8,1.5))
+    fig.add_subplot(111)
+
+    left_curvatures[frame_no] = left_curverad
+    right_curvatures[frame_no] = right_curverad
+
+    plt.plot(left_curvatures)
+    plt.plot(right_curvatures)
+    fig.canvas.draw()
+
+    # Now we can save it to a numpy array.
+    data = np.fromstring(fig.canvas.tostring_rgb(), dtype=np.uint8, sep='')
+    data = data.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+    
+    result[0:data.shape[0], 0:data.shape[1], :] = data
+    
     if verbose:
         test_before_after(image, result, prefix + "invplt.jpg")
     
     plt.close('all')
+    
+    frame_no += 1
     
     return result
     
@@ -388,6 +437,7 @@ def get_calibration_data(cal_dir, cal_save):
     return (objectPoints, imagePoints, M, Minv)
     
 def test_pipeline(cal_dir, cal_save, test_dir = "test_images"):
+    init_curvatures(len(os.listdir(test_dir)))
     (objectPoints, imagePoints, M, Minv) = get_calibration_data(cal_dir, cal_save)
     
     for f in os.listdir(test_dir):
@@ -403,6 +453,18 @@ def test_pipeline(cal_dir, cal_save, test_dir = "test_images"):
 def process_image(image):
     return run_pipeline(g_objectPoints, g_imagePoints, g_M, g_Minv, image, verbose=False)
     
+def init_curvatures(number_of_frames):
+    global left_curvatures
+    global right_curvatures
+    
+    big_neg = -50
+   
+    #left_curvatures = big_neg * np.ones(number_of_frames)
+    #right_curvatures = big_neg * np.ones(number_of_frames)
+    
+    left_curvatures = np.zeros(number_of_frames)
+    right_curvatures = np.zeros(number_of_frames)
+      
 def process_video(video_fname):
     # Need to define globals as VideoFileClip.fl_image only accepts one parameter
     global g_objectPoints
@@ -410,11 +472,13 @@ def process_video(video_fname):
     global g_M
     global g_Minv
     (g_objectPoints, g_imagePoints, g_M, g_Minv) = get_calibration_data(cal_dir, cal_save)
-    
-    clip = VideoFileClip(video_fname)
+
+    clip = VideoFileClip(video_fname).cutout(4,51)
+    init_curvatures(int(clip.fps * (clip.duration+1)))
     out_clip = clip.fl_image(process_image)
-    out_clip.write_videofile('output.mp4', audio=False)
-    #clip.save_frame("additional/frame.jpeg", t='00:00:38')
+    out_clip.write_videofile('output_take3.mp4', audio=False)
+    #for i in np.linspace(1,2,30):
+    #    clip.save_frame("additional/frame_{}.jpg".format(i), t='00:00:{}'.format(i))
 
 
 if __name__ == "__main__":
@@ -423,8 +487,8 @@ if __name__ == "__main__":
     
     video_fname = "project_video.mp4"
     
-    #test_pipeline(cal_dir, cal_save)
-    process_video(video_fname)
+    test_pipeline(cal_dir, cal_save)
+    #process_video(video_fname)
     
     
     
