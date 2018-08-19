@@ -234,43 +234,6 @@ def undistort(img, objpoints, imgpoints):
     undist = cv2.undistort(img, mtx, dist, None, mtx)
     return undist
     
-def getCalibrationPoints(fname):
-    # Try various values of nx and ny
-    for nx in [9, 8, 7]:
-        for ny in [6, 5, 7]:
-            objp = np.zeros((nx*ny,3), np.float32)
-            objp[:,:2] = np.mgrid[0:nx,0:ny].T.reshape(-1,2)
-            
-            img = cv2.imread(fname)
-            gray = cv2.cvtColor(img,cv2.COLOR_BGR2GRAY)
-            ret, corners = cv2.findChessboardCorners(gray, (nx, ny), None)
-            
-            if ret:
-                return (objp, corners)
-    
-    return (None, None)
-    
-def fitPolynomial(window_centroids_left, window_centroids_right, window_height):
-    N = len(window_centroids_left)
-    left_x = [c for c in window_centroids_left if c is not None ]
-    left_y = [(N-1-i)*window_height + window_height/2 for i in range(len(window_centroids_left)) if window_centroids_left[i] is not None]
-    
-    right_x = [c for c in window_centroids_right if c is not None ]
-    right_y = [(N-1-i)*window_height + window_height/2 for i in range(len(window_centroids_right)) if window_centroids_right[i] is not None]
-    
-    left_fit = np.polyfit(left_y, left_x, 2)
-    right_fit = np.polyfit(right_y, right_x, 2)
-    
-    left_x_real = [i * xm_per_pix for i in left_x]
-    right_x_real = [i * xm_per_pix for i in right_x]
-    left_y_real = [i * ym_per_pix for i in left_y]
-    right_y_real = [i * ym_per_pix for i in right_y]
-    
-    left_fit_real = np.polyfit(left_y_real, left_x_real, 2)
-    right_fit_real = np.polyfit(right_y_real, right_x_real, 2)
-    
-    return (left_fit, right_fit, left_fit_real, right_fit_real, min(max(left_y_real), max(right_y_real)))
-    
 def test_before_after(img_before, img_after, ofname, convert = False):
     if convert:
         img_before = cv2.cvtColor(img_before, cv2.COLOR_BGR2RGB)
@@ -278,181 +241,213 @@ def test_before_after(img_before, img_after, ofname, convert = False):
     f, (ax1, ax2) = plt.subplots(1, 2, figsize=(24, 9))
     f.tight_layout()
     ax1.imshow(img_before)
-    ax1.set_title('Original Image', fontsize=50)
+    ax1.set_title('Before', fontsize=50)
     ax2.imshow(img_after)
-    ax2.set_title('Undistorted Image', fontsize=50)
+    ax2.set_title('After', fontsize=50)
     plt.subplots_adjust(left=0., right=1, top=0.9, bottom=0.)
     plt.savefig(ofname)
-
+    
+# DEBUG: potential issue here!
 def calcCurvature(left_fit_real, right_fit_real, y_eval):
     # Calculation of R_curve (radius of curvature)
-    left_curverad = ((1 + (2*left_fit_real[0]*y_eval*ym_per_pix + left_fit_real[1])**2)**1.5) / np.absolute(2*left_fit_real[0])
-    right_curverad = ((1 + (2*right_fit_real[0]*y_eval*ym_per_pix + right_fit_real[1])**2)**1.5) / np.absolute(2*right_fit_real[0])
+    left_curverad = ((1 + (2*left_fit_real[0]*y_eval + left_fit_real[1])**2)**1.5) / np.absolute(2*left_fit_real[0])
+    right_curverad = ((1 + (2*right_fit_real[0]*y_eval + right_fit_real[1])**2)**1.5) / np.absolute(2*right_fit_real[0])
     
     return(left_curverad, left_curverad)
-    
-def run_pipeline(objectPoints, imagePoints, M, Minv, image, max_frames, verbose=False, ofname_prefix=None):
-    global running_tot 
-    
-    if verbose and ofname_prefix is None:
-        print("Warning: asking for verbose output, but no prefix is given. Skipping verbose mode...")
-        verbose = False
-    
-    prefix = ofname_prefix
 
-    # window settings
-    window_width = 50 
-    window_height = 60 # Break image into 9 vertical layers since image height is 720
-    margin = 75 # How much to slide left and right for searching
-    
-    # meters per pixel
-    global ym_per_pix
-    global xm_per_pix
+class LaneDetector:
     ym_per_pix = 3/50 # meters per pixel in y dimension
     xm_per_pix = 3.7/800 # meters per pixel in x dimension
-
-    # Undistort
-    und = undistort(image, objectPoints, imagePoints)
     
-    # Sobel
-    edges = sobel(image)
-    
-    if verbose:
-        c_edges = np.dstack(( np.zeros_like(edges), edges, np.zeros_like(edges))) * 255
-        c_edges = c_edges.astype(np.uint8)
-        combined = c_edges | image
-        test_before_after(image, combined, prefix + "sobel.jpg")
-    
-    # warp perspective
-    img_size = (und.shape[1], und.shape[0])
-    warped_e = cv2.warpPerspective(edges, M, img_size, flags=cv2.INTER_NEAREST)
-    
-    # detect lanes in warped space
-    window_centroids_left, window_centroids_right = find_window_centroids(warped_e, window_width, window_height, margin)
-    left_fit, right_fit, left_fit_real, right_fit_real, max_y = fitPolynomial(window_centroids_left, window_centroids_right, window_height)
-
-    # Plots the warped road, along with detected lanes and the mapped polynomials along them
-    if verbose:
-        # Plot warped road
-        warped = cv2.warpPerspective(image, M, img_size, flags=cv2.INTER_NEAREST)
-        f, (ax1, ax2) = plt.subplots(1, 2, figsize=(24, 9))
-        f.tight_layout()
-        ax1.imshow(warped)
-        
-        # Plot polynomials
-        ploty = np.linspace(0, warped_e.shape[0]-1, warped_e.shape[0] )
-        left_fitx = left_fit[0]*ploty**2 + left_fit[1]*ploty + left_fit[2]     
-        right_fitx = right_fit[0]*ploty**2 + right_fit[1]*ploty + right_fit[2]
-        plt.plot(left_fitx, ploty, color='yellow')
-        plt.plot(right_fitx, ploty, color='yellow')
-        ax1.set_title('Original Image', fontsize=50)
-        
-        # Plot detected lanes
-        output = map_windows_to_centroids(window_centroids_left, window_centroids_right, window_width, window_height, warped_e)
-        ax2.imshow(output)
-        ax2.set_title('Undistorted Image', fontsize=50)
-        plt.subplots_adjust(left=0., right=1, top=0.9, bottom=0.)
-        plt.savefig(prefix + "detect.jpg")
-
-    # mark lanes
-    warped_marking = markLanes(image, warped_e, Minv, left_fit, right_fit)
-    # Combine the result with the original image
-    result = cv2.addWeighted(und, 1, warped_marking, 0.3, 0)
-    
-    left_curverad, right_curverad = calcCurvature(left_fit_real, right_fit_real, max_y)
-    
-    
-
-    left_curvatures.append(left_curverad)
-    right_curvatures.append(right_curverad)
-    
-    avg_wind = 30
-    num_frames = len(left_curvatures)
-    running_tot += (left_curverad + right_curverad)/2
-    
-    if num_frames > avg_wind:       
-        running_tot -= (left_curvatures[-(avg_wind+1)] + right_curvatures[-(avg_wind+1)])/2
-    
-    cur_running_avg = running_tot/min(avg_wind, num_frames)
-    running_avgs.append(cur_running_avg)
-    
-    f, ax = plt.subplots(1, figsize=(8,1.5))
-    #ax = axs[0]
-    ax.figsize=(8,1.5)
-    ax.set_xlim([0, max_frames])
-    ax.set_ylim([0, 3000])
-    
-    plt.plot(right_curvatures)
-    plt.plot(running_avgs)
-    ax.figure.canvas.draw()
-
-    # Now we can save it to a numpy array.
-    data = np.fromstring(ax.figure.canvas.tostring_rgb(), dtype=np.uint8, sep='')
-    data = data.reshape(ax.figure.canvas.get_width_height()[::-1] + (3,))
-    
-    result[0:data.shape[0], 0:data.shape[1], :] = data
-    
-    result[data.shape[0]:data.shape[0]+100, : data.shape[1],:] = 255 
-    
-    cv2.putText(result, "Curvature: {} m".format(int(cur_running_avg)), (30, 200), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (250, 80, 0), lineType=cv2.LINE_AA)
-    
-    if verbose:
-        test_before_after(image, result, prefix + "invplt.jpg")
-    
-    plt.close('all')
-    
-    return result
-    
-def get_calibration_data(cal_dir, cal_save):
-    # Various points for the transformation. The closer ones are listed first
-    #transform_src = np.array([[250, 680], [434, 550], [860, 550], [1080, 680]], np.float32)
-    #transform_dst = np.array([[250, 680], [250, 550], [1080, 550], [1080, 680]], np.float32)
-    
-    #transform_src = np.array([[250, 680], [535, 490], [752, 490], [1058, 680]], np.float32)
-    #transform_dst = np.array([[250, 680], [250, 490], [1058, 490], [1058, 680]], np.float32)
-    
+    # Perspective transform data
     transform_src = np.array([[256, 678], [564, 472], [722, 472], [1054, 678]], np.float32)
     transform_dst = np.array([[256, 678], [256, 472], [1054, 472], [1054, 678]], np.float32)
     
-    #transform_src = np.array([[250, 680], [593, 450], [687, 450], [1058, 680]], np.float32)
-    #transform_dst = np.array([[250, 680], [250, 450], [1058, 450], [1058, 680]], np.float32)
+    cal_save = "cal_data.p"
     
-    #transform_src = np.array([[250, 680], [624, 431], [655, 431], [1058, 680]], np.float32)
-    #transform_dst = np.array([[250, 680], [250, 431], [1058, 431], [1058, 680]], np.float32
+    def __init__(self, max_frames, cal_dir):
+        self.left_curvatures = []
+        self.right_curvatures = []
+        self.running_avgs = []
+        self.running_tot = 0
+        self.max_frames = max_frames
+        (self.objectPoints, self.imagePoints, self.M, self.Minv) = self.get_calibration_data(cal_dir, self.cal_save, self.transform_src, self.transform_dst)
     
-    print("Getting calibration points")
-    # Collect calibration points
-    if not os.path.exists(cal_save):
-        # Points in the real world
-        objectPoints = []
-        # Points in the image taken by the camera
-        imagePoints = []
-        for f in os.listdir(cal_dir):
-            if not f.endswith(".jpg"):
-                continue
-            fname = os.path.join(cal_dir, f)
-            objp, corners = getCalibrationPoints(fname)       
+    def getCalibrationPoints(self, fname):
+        # Try various values of nx and ny
+        for nx in [9, 8, 7]:
+            for ny in [6, 5, 7]:
+                objp = np.zeros((nx*ny,3), np.float32)
+                objp[:,:2] = np.mgrid[0:nx,0:ny].T.reshape(-1,2)
+                
+                img = cv2.imread(fname)
+                gray = cv2.cvtColor(img,cv2.COLOR_BGR2GRAY)
+                ret, corners = cv2.findChessboardCorners(gray, (nx, ny), None)
+                
+                if ret:
+                    return (objp, corners)
+        
+        return (None, None)
+        
+    def get_calibration_data(self, cal_dir, cal_save, transform_src, transform_dst):
+        print("Getting calibration points")
+        # Collect calibration points
+        if not os.path.exists(cal_save):
+            # Points in the real world
+            objectPoints = []
+            # Points in the image taken by the camera
+            imagePoints = []
+            for f in os.listdir(cal_dir):
+                if not f.endswith(".jpg"):
+                    continue
+                fname = os.path.join(cal_dir, f)
+                objp, corners = self.getCalibrationPoints(fname)       
+                
+                if objp is not None:
+                    objectPoints.append(objp)
+                    imagePoints.append(corners) 
+            with open(cal_save, "wb") as ofh:
+                pickle.dump(objectPoints, ofh)
+                pickle.dump(imagePoints, ofh)
+        else:
+            with open(cal_save, "rb") as ifh:
+                objectPoints = pickle.load(ifh)
+                imagePoints = pickle.load(ifh)
+                
+        print("Getting transformation matrix M")
+        M = cv2.getPerspectiveTransform(transform_src, transform_dst)
+        Minv = cv2.getPerspectiveTransform(transform_dst, transform_src)
+        
+        return (objectPoints, imagePoints, M, Minv)
+    
+    def fitPolynomial(self, window_centroids_left, window_centroids_right, window_height):
+        N = len(window_centroids_left)
+        left_x = [c for c in window_centroids_left if c is not None ]
+        left_y = [(N-1-i)*window_height + window_height/2 for i in range(len(window_centroids_left)) if window_centroids_left[i] is not None]
+        
+        right_x = [c for c in window_centroids_right if c is not None ]
+        right_y = [(N-1-i)*window_height + window_height/2 for i in range(len(window_centroids_right)) if window_centroids_right[i] is not None]
+        
+        left_fit = np.polyfit(left_y, left_x, 2)
+        right_fit = np.polyfit(right_y, right_x, 2)
+        
+        left_x_real = [i * self.xm_per_pix for i in left_x]
+        right_x_real = [i * self.xm_per_pix for i in right_x]
+        left_y_real = [i * self.ym_per_pix for i in left_y]
+        right_y_real = [i * self.ym_per_pix for i in right_y]
+        
+        left_fit_real = np.polyfit(left_y_real, left_x_real, 2)
+        right_fit_real = np.polyfit(right_y_real, right_x_real, 2)
+        
+        return (left_fit, right_fit, left_fit_real, right_fit_real, min(max(left_y_real), max(right_y_real)))   
+
+
+    def run_pipeline(self, image, verbose=False, ofname_prefix=None):
+        if verbose and ofname_prefix is None:
+            print("Warning: asking for verbose output, but no prefix is given. Skipping verbose mode...")
+            verbose = False
+        
+        prefix = ofname_prefix
+
+        # window settings
+        window_width = 50 
+        window_height = 60 # Break image into 9 vertical layers since image height is 720
+        margin = 75 # How much to slide left and right for searching
+
+        # Undistort
+        und = undistort(image, self.objectPoints, self.imagePoints)
+        
+        # Sobel
+        edges = sobel(image)
+        
+        if verbose:
+            c_edges = np.dstack(( np.zeros_like(edges), edges, np.zeros_like(edges))) * 255
+            c_edges = c_edges.astype(np.uint8)
+            combined = c_edges | image
+            test_before_after(image, combined, prefix + "sobel.jpg")
+        
+        # warp perspective
+        img_size = (und.shape[1], und.shape[0])
+        warped_e = cv2.warpPerspective(edges, self.M, img_size, flags=cv2.INTER_NEAREST)
+        
+        # detect lanes in warped space
+        window_centroids_left, window_centroids_right = find_window_centroids(warped_e, window_width, window_height, margin)
+        left_fit, right_fit, left_fit_real, right_fit_real, max_y = self.fitPolynomial(window_centroids_left, window_centroids_right, window_height)
+
+        # Plots the warped road, along with detected lanes and the mapped polynomials along them
+        if verbose:
+            # Plot warped road
+            warped = cv2.warpPerspective(image, self.M, img_size, flags=cv2.INTER_NEAREST)
+            f, (ax1, ax2) = plt.subplots(1, 2, figsize=(24, 9))
+            f.tight_layout()
+            ax1.imshow(warped)
             
-            if objp is not None:
-                objectPoints.append(objp)
-                imagePoints.append(corners) 
-        with open(cal_save, "wb") as ofh:
-            pickle.dump(objectPoints, ofh)
-            pickle.dump(imagePoints, ofh)
-    else:
-        with open(cal_save, "rb") as ifh:
-            objectPoints = pickle.load(ifh)
-            imagePoints = pickle.load(ifh)
+            # Plot polynomials
+            ploty = np.linspace(0, warped_e.shape[0]-1, warped_e.shape[0] )
+            left_fitx = left_fit[0]*ploty**2 + left_fit[1]*ploty + left_fit[2]     
+            right_fitx = right_fit[0]*ploty**2 + right_fit[1]*ploty + right_fit[2]
+            plt.plot(left_fitx, ploty, color='yellow')
+            plt.plot(right_fitx, ploty, color='yellow')
+            ax1.set_title('Original Image', fontsize=50)
             
-    print("Getting transformation matrix M")
-    M = cv2.getPerspectiveTransform(transform_src, transform_dst)
-    Minv = cv2.getPerspectiveTransform(transform_dst, transform_src)
+            # Plot detected lanes
+            output = map_windows_to_centroids(window_centroids_left, window_centroids_right, window_width, window_height, warped_e)
+            ax2.imshow(output)
+            ax2.set_title('Undistorted Image', fontsize=50)
+            plt.subplots_adjust(left=0., right=1, top=0.9, bottom=0.)
+            plt.savefig(prefix + "detect.jpg")
+
+        # mark lanes
+        warped_marking = markLanes(image, warped_e, self.Minv, left_fit, right_fit)
+        # Combine the result with the original image
+        result = cv2.addWeighted(und, 1, warped_marking, 0.3, 0)
+        
+        left_curverad, right_curverad = calcCurvature(left_fit_real, right_fit_real, max_y)
+        
+        self.left_curvatures.append(left_curverad)
+        self.right_curvatures.append(right_curverad)
+        
+        avg_wind = 30
+        num_frames = len(self.left_curvatures)
+        self.running_tot += (left_curverad + right_curverad)/2
+        
+        if num_frames > avg_wind:       
+            self.running_tot -= (self.left_curvatures[-(avg_wind+1)] + self.right_curvatures[-(avg_wind+1)])/2
+        
+        cur_running_avg = self.running_tot/min(avg_wind, num_frames)
+        self.running_avgs.append(cur_running_avg)
+        
+        f, ax = plt.subplots(1, figsize=(8,1.5))
+        #ax = axs[0]
+        ax.figsize=(8,1.5)
+        ax.set_xlim([0, self.max_frames])
+        ax.set_ylim([0, 3000])
+        
+        plt.plot(self.right_curvatures)
+        plt.plot(self.running_avgs)
+        ax.figure.canvas.draw()
+
+        # Now we can save it to a numpy array.
+        data = np.fromstring(ax.figure.canvas.tostring_rgb(), dtype=np.uint8, sep='')
+        data = data.reshape(ax.figure.canvas.get_width_height()[::-1] + (3,))
+        
+        result[0:data.shape[0], 0:data.shape[1], :] = data
+        
+        result[data.shape[0]:data.shape[0]+100, : data.shape[1],:] = 255 
+        
+        cv2.putText(result, "Curvature: {} m".format(int(cur_running_avg)), (30, 200), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (250, 80, 0), lineType=cv2.LINE_AA)
+        
+        if verbose:
+            test_before_after(image, result, prefix + "invplt.jpg")
+        
+        plt.close('all')
+        
+        return result
     
-    return (objectPoints, imagePoints, M, Minv)
+
     
-def test_pipeline(cal_dir, cal_save, test_dir = "test_images"):
-    init_curvatures()
-    (objectPoints, imagePoints, M, Minv) = get_calibration_data(cal_dir, cal_save)
+def test_pipeline(cal_dir, test_dir = "test_images"):
+    detector = LaneDetector(len(os.listdir(test_dir)), cal_dir)
     
     for f in os.listdir(test_dir):
         if not f.endswith("jpg"):
@@ -461,36 +456,19 @@ def test_pipeline(cal_dir, cal_save, test_dir = "test_images"):
         fname = os.path.join(test_dir, f)
         image = mpimg.imread(fname)
         prefix = os.path.basename(fname).replace('.jpg', '') + "_"
-        result = run_pipeline(objectPoints, imagePoints, M, Minv, image, len(os.listdir(test_dir)), True, prefix)
-
+        result = detector.run_pipeline(image, True, prefix)
     
 def process_image(image):
-    return run_pipeline(g_objectPoints, g_imagePoints, g_M, g_Minv, image, g_max_frames, verbose=False)
-    
-def init_curvatures():
-    global left_curvatures
-    global right_curvatures
-    global running_tot
-    global running_avgs
-    
-    left_curvatures = []
-    right_curvatures = []
-    running_avgs = []
-    running_tot = 0
+    global g_detector
+    return g_detector.run_pipeline(image, verbose=False)
       
-def process_video(video_fname):
+def process_video(cal_dir, video_fname):
     # Need to define globals as VideoFileClip.fl_image only accepts one parameter
-    global g_objectPoints
-    global g_imagePoints
-    global g_M
-    global g_Minv
-    global g_max_frames
-    (g_objectPoints, g_imagePoints, g_M, g_Minv) = get_calibration_data(cal_dir, cal_save)
+    global g_detector
 
-    
-    init_curvatures()
     clip = VideoFileClip(video_fname)
-    g_max_frames = clip.fps * (clip.duration+1)
+    max_frames = clip.fps * (clip.duration+1)
+    g_detector = LaneDetector(max_frames)
     out_clip = clip.fl_image(process_image)
     out_clip.write_videofile('output_take4.mp4', audio=False)
     #for i in np.linspace(1,2,30):
@@ -498,13 +476,12 @@ def process_video(video_fname):
 
 
 if __name__ == "__main__":
-    cal_dir = "camera_cal"
-    cal_save = "cal_data.p"
+    cal_dir = "camera_cal"    
     
     video_fname = "project_video.mp4"
     
-    #test_pipeline(cal_dir, cal_save)
-    process_video(video_fname)
+    test_pipeline(cal_dir)
+    #process_video(cal_dir, video_fname)
     
     
     
