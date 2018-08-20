@@ -40,6 +40,11 @@ def find_window_centroids(image, window_width, window_height, margin, minpix = 1
     l_shift = 0
     r_shift = 0
     
+    miss_thresh = 4
+    l_miss = 0
+    r_miss = 0
+    
+    
     # Go through each layer looking for max pixel locations
     for level in range(1,(int)(image.shape[0]/window_height)):
         # convolve the window into the vertical slice of the image
@@ -52,30 +57,34 @@ def find_window_centroids(image, window_width, window_height, margin, minpix = 1
         l_max_index = int(min(l_center+offset+margin,image.shape[1]))
         l_conv = conv_signal[l_min_index:l_max_index]
         # Only change the new center if we found enough pixels
-        if np.max(l_conv) >= minpix:
+        if np.max(l_conv) >= minpix and l_miss < miss_thresh:
             prev_l_center = l_center
             l_center = np.argmax(l_conv)+l_min_index-offset
             l_shift = l_center - prev_l_center
             window_centroids_left.append(l_center)
-            
-        else:
-            
+            l_miss = 0
+        else:      
             l_center = int(min(max(l_center + l_shift, 0), image.shape[1]))
             window_centroids_left.append(None)
+            l_miss += 1
+            
         # Find the best right centroid by using past right center as a reference
         r_min_index = int(max(r_center+offset-margin,0))
         r_max_index = int(min(r_center+offset+margin,image.shape[1]))
         r_conv = conv_signal[r_min_index:r_max_index]
         # Only change the new center if we found enough pixels
-        if np.max(r_conv) >= minpix:
+        if np.max(r_conv) >= minpix and r_miss < miss_thresh:
             prev_r_center = r_center
             r_center = np.argmax(r_conv)+r_min_index-offset
             r_shift = r_center - prev_r_center
             window_centroids_right.append(r_center)
+            r_miss = 0
         else:
             
             r_center = int(min(max(r_center + r_shift, 0), image.shape[1]))
             window_centroids_right.append(None)
+            r_miss += 1
+            
         
 
     return window_centroids_left, window_centroids_right
@@ -141,9 +150,9 @@ def sobel(image):
      
     # Choose a Sobel kernel size
     ksize = 31 # Choose a larger odd number to smooth gradient measurements
-    x_thresh = (5, 100)
+    x_thresh = (10, 255)
     y_thresh = (20, 100)
-    mag_t = (70, 100)
+    mag_t = (70, 255)
     dir_thresh = (0.2, 1.7)
 
     # Apply each of the thresholding functions
@@ -159,12 +168,13 @@ def sobel(image):
     #combined[(((mag_binary == 1) & (dir_binary == 1)) | (color_grad == 1))] = 1
     
     combined[(color_grad == 1) & (gradx == 1)] = 1
+    #combined[(color_grad == 1)] = 1
     
     
     #return color_grad
     return combined
     
-def sobel_color(image, s_thresh=(70, 255), h_thresh = (0, 255), rgb_min = 200):
+def sobel_color(image, s_thresh=(95, 255), h_thresh = (0, 255), rgb_min = 200):
     hls = cv2.cvtColor(image, cv2.COLOR_RGB2HLS)
     s_channel = hls[:,:,2]
     h_channel = hls[:,:,0]
@@ -253,11 +263,12 @@ def calcCurvature(left_fit_real, right_fit_real, y_eval):
     left_curverad = ((1 + (2*left_fit_real[0]*y_eval + left_fit_real[1])**2)**1.5) / np.absolute(2*left_fit_real[0])
     right_curverad = ((1 + (2*right_fit_real[0]*y_eval + right_fit_real[1])**2)**1.5) / np.absolute(2*right_fit_real[0])
     
-    return(left_curverad, left_curverad)
+    return(left_curverad, right_curverad)
 
 class LaneDetector:
+    road_width = 3.7
     ym_per_pix = 3/50 # meters per pixel in y dimension
-    xm_per_pix = 3.7/800 # meters per pixel in x dimension
+    xm_per_pix = road_width/800 # meters per pixel in x dimension
     
     # Perspective transform data
     transform_src = np.array([[256, 678], [564, 472], [722, 472], [1054, 678]], np.float32)
@@ -277,6 +288,9 @@ class LaneDetector:
         self.right_curvatures = []
         self.running_avgs = []
         self.running_tot = 0
+        self.left_fit = []
+        self.right_fit = []
+        self.detected = [] 
         self.max_frames = max_frames
         (self.objectPoints, self.imagePoints, self.M, self.Minv) = self.get_calibration_data(cal_dir, self.cal_save, self.transform_src, self.transform_dst)
     
@@ -346,7 +360,7 @@ class LaneDetector:
         left_fit_real = np.polyfit(left_y_real, left_x_real, 2)
         right_fit_real = np.polyfit(right_y_real, right_x_real, 2)
         
-        return (left_fit, right_fit, left_fit_real, right_fit_real, min(max(left_y_real), max(right_y_real)))  
+        return (left_fit, right_fit, left_fit_real, right_fit_real, left_y_real, right_y_real) 
 
     def plot_polynomials_in_warp_space(self, image, warped_e, window_centroids_left, window_centroids_right, left_fit, right_fit, ofname):
         img_size = (image.shape[1], image.shape[0])
@@ -391,13 +405,18 @@ class LaneDetector:
         
         result[data.shape[0]:data.shape[0]+100, : data.shape[1],:] = 255 
         
-        cv2.putText(result, "Curvature: {} m".format(int(self.cur_running_avg)), (30, 200), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (250, 80, 0), lineType=cv2.LINE_AA)
+        cv2.putText(result, "Curvature: {} m".format(int(self.cur_running_avg)), (30, 180), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (250, 80, 0), lineType=cv2.LINE_AA)
+        cv2.putText(result, "L Curvature: {} m".format(int(self.left_curvatures[-1])), (30, 200), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (250, 80, 0), lineType=cv2.LINE_AA)
+        cv2.putText(result, "R Curvature: {} m".format(int(self.right_curvatures[-1])), (30, 220), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (250, 80, 0), lineType=cv2.LINE_AA)
         
         return result
         
-    def updateCurvatures(self, left_curverad, right_curverad):
+    def updateFrames(self, left_curverad, right_curverad, left_fit, right_fit):
         self.left_curvatures.append(left_curverad)
         self.right_curvatures.append(right_curverad)
+        
+        self.left_fit.append(left_fit)
+        self.right_fit.append(right_fit)
       
         num_frames = len(self.left_curvatures)
         self.running_tot += (left_curverad + right_curverad)/2
@@ -407,6 +426,48 @@ class LaneDetector:
         
         self.cur_running_avg = self.running_tot/min(self.avg_wind, num_frames)
         self.running_avgs.append(self.cur_running_avg)
+        
+    
+    def sanity_check(self, left_fit_real, right_fit_real, min_y, max_y, left_curverad, right_curverad):
+        # Skip checking if we didn't see enough frames
+        if len(self.left_curvatures) < self.avg_wind:
+            return (True, True)
+        
+        width_thresh = 0.4      # Road width mismatch in meters 
+        curv_lr_thresh = 0.3   # Curvature mismatch between left and right as a fraction
+        curve_t_thresh = 0.2    # Curvature mismatch in time as a fraction
+        
+        curv_lr_mismatch = abs((left_curverad - right_curverad)/max([left_curverad, right_curverad]))
+        
+        x_l_min = left_fit_real[0] * min_y**2 + left_fit_real[1] * min_y + left_fit_real[2]
+        x_l_max = left_fit_real[0] * max_y**2 + left_fit_real[1] * max_y + left_fit_real[2]
+        
+        x_r_min = right_fit_real[0] * min_y**2 + right_fit_real[1] * min_y + right_fit_real[2]
+        x_r_max = right_fit_real[0] * max_y**2 + right_fit_real[1] * max_y + right_fit_real[2]
+        
+        width_top = x_r_min - x_l_min
+        width_bottom = x_r_max - x_l_max
+        
+        width_check = (abs(width_top-self.road_width) + abs(width_bottom-self.road_width)) < 2 * width_thresh
+        curve_lr_check = curv_lr_mismatch < curv_lr_thresh
+              
+        if width_check and curve_lr_check:
+            return (True, True)
+            
+        if (not width_check) and (not curve_lr_check):
+            return (False, False)
+        
+        L_curve_t_check = (left_curverad - self.cur_running_avg)/self.cur_running_avg < curve_t_thresh
+        R_curve_t_check = (right_curverad - self.cur_running_avg)/self.cur_running_avg < curve_t_thresh
+        
+        if (not curve_lr_check) and L_curve_t_check:
+            return (True, False)
+            
+        if (not curve_lr_check) and R_curve_t_check :
+            return (False, True)
+        
+        return (False, False)
+        
         
         
     def run_pipeline(self, image, verbose=False, ofname_prefix=None):
@@ -434,8 +495,32 @@ class LaneDetector:
         
         # detect lanes in warped space
         window_centroids_left, window_centroids_right = find_window_centroids(warped_e, self.window_width, self.window_height, self.margin)
-        left_fit, right_fit, left_fit_real, right_fit_real, max_y = self.fitPolynomial(window_centroids_left, window_centroids_right, self.window_height)
-
+        left_fit, right_fit, left_fit_real, right_fit_real, left_y_real, right_y_real = self.fitPolynomial(window_centroids_left, window_centroids_right, self.window_height)
+        max_y = min(max(left_y_real), max(right_y_real))
+        min_y = max(min(left_y_real), min(right_y_real))
+        
+        
+        left_curverad, right_curverad = calcCurvature(left_fit_real, right_fit_real, max_y)
+        
+        left_pass, right_pass = self.sanity_check(left_fit_real, right_fit_real, min_y, max_y, left_curverad, right_curverad)
+        
+        if left_pass and right_pass:
+            self.detected.append(".")
+        elif not (left_pass or right_pass):
+            self.detected.append("X")
+        else:
+            self.detected.append("P")
+        
+        if not left_pass:
+            left_fit = self.left_fit[-1]
+            left_curverad = self.left_curvatures[-1]
+            
+        if not right_pass:
+            right_fit = self.right_fit[-1]
+            right_curverad = self.right_curvatures[-1]
+        
+        self.updateFrames(left_curverad, right_curverad, left_fit, right_fit)
+        
         # Plots the warped road, along with detected lanes and the mapped polynomials along them
         if verbose:
             self.plot_polynomials_in_warp_space(image, warped_e, window_centroids_left, window_centroids_right, left_fit, right_fit, prefix + "detect.jpg")
@@ -445,9 +530,7 @@ class LaneDetector:
         
         # Combine the result with the original image
         result = cv2.addWeighted(und, 1, warped_marking, 0.3, 0)
-        
-        left_curverad, right_curverad = calcCurvature(left_fit_real, right_fit_real, max_y)
-        self.updateCurvatures(left_curverad, right_curverad)
+
    
         result = self.addHUD(result)
 
@@ -457,13 +540,16 @@ class LaneDetector:
         plt.close('all')
         
         return result
-    
 
-    
+# Test out following snippets:        
+# 22-24
+# 38 - 40    
 def test_pipeline(cal_dir, test_dir = "test_images"):
-    detector = LaneDetector(len(os.listdir(test_dir)), cal_dir)
+    detector = LaneDetector(1, cal_dir)
     
     for f in os.listdir(test_dir):
+        if not ("test6" in f or "test1" in f):
+            continue
         if not f.endswith("jpg"):
             continue
         print ("Detecting lanes in " + f)
@@ -482,9 +568,12 @@ def process_video(cal_dir, video_fname):
 
     clip = VideoFileClip(video_fname)
     max_frames = clip.fps * (clip.duration+1)
-    g_detector = LaneDetector(max_frames)
+    g_detector = LaneDetector(max_frames, cal_dir)
     out_clip = clip.fl_image(process_image)
-    out_clip.write_videofile('output_take4.mp4', audio=False)
+    out_clip.write_videofile('output_w_santizer_strict.mp4', audio=False)
+    print(g_detector.detected)
+    
+    
     #for i in np.linspace(1,2,30):
     #    clip.save_frame("additional/frame_{}.jpg".format(i), t='00:00:{}'.format(i))
 
@@ -494,8 +583,8 @@ if __name__ == "__main__":
     
     video_fname = "project_video.mp4"
     
-    test_pipeline(cal_dir)
-    #process_video(cal_dir, video_fname)
+    #test_pipeline(cal_dir)
+    process_video(cal_dir, video_fname)
     
     
     
