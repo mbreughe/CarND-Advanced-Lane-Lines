@@ -66,7 +66,6 @@ def find_window_centroids(image, window_width, window_height, margin, minpix = 1
             l_miss = 0
         else:      
             l_center = int(min(max(l_center + l_shift, 0), image.shape[1]))
-            window_centroids_left.append(None)
             l_miss += 1
             
         # Find the best right centroid by using past right center as a reference
@@ -81,52 +80,42 @@ def find_window_centroids(image, window_width, window_height, margin, minpix = 1
             window_centroids_right.append((r_center, y_val))
             r_miss = 0
         else:
-            
             r_center = int(min(max(r_center + r_shift, 0), image.shape[1]))
-            window_centroids_right.append(None)
             r_miss += 1
             
-    if all(v is  None for v in window_centroids_left):
+    if len(window_centroids_left) == 0:
         window_centroids_left = [(l_center_init, (N - (level + 1)) * window_height + window_height/2) for level in range(0, N)]
      
-    if all(v is  None for v in window_centroids_right):
+    if len(window_centroids_right) == 0:
         window_centroids_right = [(r_center_init, (N - (level + 1)) * window_height + window_height/2) for level in range(0, N)]
 
     return window_centroids_left, window_centroids_right
 
 def map_windows_to_centroids(window_centroids_left, window_centroids_right, window_width, window_height, warped_e):    
-    # If we found any window centers
-    if len(window_centroids_left) > 0:
+    # Points used to draw all the left and right windows
+    l_points = np.zeros_like(warped_e)
+    r_points = np.zeros_like(warped_e)
 
-        # Points used to draw all the left and right windows
-        l_points = np.zeros_like(warped_e)
-        r_points = np.zeros_like(warped_e)
+    # Go through each level and draw the windows     
+    for left_center in window_centroids_left:
+        # Window_mask is a function to draw window areas
+        l_mask = window_mask(window_width,window_height,warped_e,left_center)
+        # Add graphic points from window mask here to total pixels found 
+        l_points[(l_points == 255) | ((l_mask == 1) ) ] = 255
+    
+    for right_center in window_centroids_right:
+            r_mask = window_mask(window_width,window_height,warped_e,right_center)
+            r_points[(r_points == 255) | ((r_mask == 1) ) ] = 255
 
-        # Go through each level and draw the windows     
-        for level in range(0,len(window_centroids_left)):
-            # Window_mask is a function to draw window areas
-            if (not window_centroids_left[level] is None):
-                l_mask = window_mask(window_width,window_height,warped_e,window_centroids_left[level])
-                # Add graphic points from window mask here to total pixels found 
-                l_points[(l_points == 255) | ((l_mask == 1) ) ] = 255
-            
-            if (not window_centroids_right[level] is None):
-                r_mask = window_mask(window_width,window_height,warped_e,window_centroids_right[level])
-                r_points[(r_points == 255) | ((r_mask == 1) ) ] = 255
-
-        # Draw the results
-        #template = np.array(r_points+l_points,np.uint8) # add both left and right window pixels together
-        zero_channel = np.zeros_like(r_points) # create a zero color channel
-        #template = np.array(cv2.merge((zero_channel,template,zero_channel)),np.uint8) # make window pixels green
-        
-        template = np.array(cv2.merge((zero_channel, np.array(r_points), np.array(l_points))), np.uint8)
-        warpage= np.dstack((warped_e, warped_e, warped_e))*255 # making the original road pixels 3 color channels
-        warpage = warpage.astype(np.uint8)
-        output = cv2.addWeighted(warpage, 1, template, 0.5, 0.0) # overlay the orignal road image with window results
-     
-    # If no window centers found, just display orginal road image
-    else:
-        output = np.array(cv2.merge((warped_e,warped_e,warped_e)),np.uint8)
+    # Draw the results
+    #template = np.array(r_points+l_points,np.uint8) # add both left and right window pixels together
+    zero_channel = np.zeros_like(r_points) # create a zero color channel
+    #template = np.array(cv2.merge((zero_channel,template,zero_channel)),np.uint8) # make window pixels green
+    
+    template = np.array(cv2.merge((zero_channel, np.array(r_points), np.array(l_points))), np.uint8)
+    warpage= np.dstack((warped_e, warped_e, warped_e))*255 # making the original road pixels 3 color channels
+    warpage = warpage.astype(np.uint8)
+    output = cv2.addWeighted(warpage, 1, template, 0.5, 0.0) # overlay the orignal road image with window results
     
     return output
     
@@ -352,11 +341,11 @@ class LaneDetector:
         return (objectPoints, imagePoints, M, Minv)
     
     def fitPolynomial(self, window_centroids_left, window_centroids_right, window_height):
-        left_x = [c[0] for c in window_centroids_left if c is not None ]
-        left_y = [c[1] for c in window_centroids_left if c is not None]
+        left_x = [c[0] for c in window_centroids_left]
+        left_y = [c[1] for c in window_centroids_left]
         
-        right_x = [c[0] for c in window_centroids_right if c is not None ]
-        right_y = [c[1] for c in window_centroids_right if c is not None]
+        right_x = [c[0] for c in window_centroids_right]
+        right_y = [c[1] for c in window_centroids_right]
         
         left_fit = np.polyfit(left_y, left_x, 2)
         right_fit = np.polyfit(right_y, right_x, 2)
@@ -587,7 +576,7 @@ def process_video(cal_dir, video_fname):
     print (g_dump_range)
     g_detector = LaneDetector(max_frames, cal_dir)
     out_clip = clip.fl_image(process_image)
-    out_clip.write_videofile('output_w_santizer_fixup.mp4', audio=False)
+    out_clip.write_videofile('output_w_santizer_fixup_nobranches.mp4', audio=False)
     print(g_detector.detected)
     
     
