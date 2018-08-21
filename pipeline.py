@@ -17,7 +17,7 @@ def window_mask(width, height, img_ref, center):
 
 def find_window_centroids(image, window_width, window_height, margin, minpix = 10):
 
-    N = image.shape[0]/window_height # number of windows in y direction
+    N = int(image.shape[0]/window_height) # number of windows in y direction
     
     window_centroids_left = [] # Store the left, window centroid positions per level
     window_centroids_right = [] # Store the right window centroid positions per level
@@ -30,15 +30,12 @@ def find_window_centroids(image, window_width, window_height, margin, minpix = 1
     l_sum = np.sum(image[int(3*image.shape[0]/4):,:int(image.shape[1]/2)], axis=0)
 
     np.convolve(window,l_sum)
-    l_center = np.argmax(np.convolve(window,l_sum))-window_width/2
+    l_center_init = np.argmax(np.convolve(window,l_sum))-window_width/2
+    l_center = l_center_init
 
     r_sum = np.sum(image[int(3*image.shape[0]/4):,int(image.shape[1]/2):], axis=0)
-    r_center = np.argmax(np.convolve(window,r_sum))-window_width/2+int(image.shape[1]/2)
-    
-    # Add what we found for the first layer
-    y_val = (N-1)*window_height + window_height/2
-    window_centroids_left.append((l_center,  y_val))
-    window_centroids_left.append((r_center,  y_val))
+    r_center_init = np.argmax(np.convolve(window,r_sum))-window_width/2+int(image.shape[1]/2)
+    r_center = r_center_init
     
     l_shift = 0
     r_shift = 0
@@ -47,10 +44,8 @@ def find_window_centroids(image, window_width, window_height, margin, minpix = 1
     l_miss = 0
     r_miss = 0
     
-    
-    
     # Go through each layer looking for max pixel locations
-    for level in range(1,(int)(image.shape[0]/window_height)):
+    for level in range(0, N):
         y_val = (N-(level+1))*window_height + window_height/2
         
         # convolve the window into the vertical slice of the image
@@ -90,7 +85,12 @@ def find_window_centroids(image, window_width, window_height, margin, minpix = 1
             r_center = int(min(max(r_center + r_shift, 0), image.shape[1]))
             window_centroids_right.append(None)
             r_miss += 1
-    
+            
+    if all(v is  None for v in window_centroids_left):
+        window_centroids_left = [(l_center_init, (N - (level + 1)) * window_height + window_height/2) for level in range(0, N)]
+     
+    if all(v is  None for v in window_centroids_right):
+        window_centroids_right = [(r_center_init, (N - (level + 1)) * window_height + window_height/2) for level in range(0, N)]
 
     return window_centroids_left, window_centroids_right
 
@@ -352,7 +352,6 @@ class LaneDetector:
         return (objectPoints, imagePoints, M, Minv)
     
     def fitPolynomial(self, window_centroids_left, window_centroids_right, window_height):
-        N = len(window_centroids_left)
         left_x = [c[0] for c in window_centroids_left if c is not None ]
         left_y = [c[1] for c in window_centroids_left if c is not None]
         
