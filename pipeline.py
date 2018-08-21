@@ -10,12 +10,14 @@ from moviepy.editor import VideoFileClip
 curvatures = list()
 
 
-def window_mask(width, height, img_ref, center,level):
+def window_mask(width, height, img_ref, center):
     output = np.zeros_like(img_ref)
-    output[int(img_ref.shape[0]-(level+1)*height):int(img_ref.shape[0]-level*height),max(0,int(center-width/2)):min(int(center+width/2),img_ref.shape[1])] = 1
+    output[int(center[1]- height/2):int(center[1] + height/2),max(0,int(center[0] - width/2)):min(int(center[0] + width/2),img_ref.shape[1])] = 1
     return output
 
 def find_window_centroids(image, window_width, window_height, margin, minpix = 10):
+
+    N = image.shape[0]/window_height # number of windows in y direction
     
     window_centroids_left = [] # Store the left, window centroid positions per level
     window_centroids_right = [] # Store the right window centroid positions per level
@@ -34,8 +36,9 @@ def find_window_centroids(image, window_width, window_height, margin, minpix = 1
     r_center = np.argmax(np.convolve(window,r_sum))-window_width/2+int(image.shape[1]/2)
     
     # Add what we found for the first layer
-    window_centroids_left.append(l_center)
-    window_centroids_right.append(r_center)
+    y_val = (N-1)*window_height + window_height/2
+    window_centroids_left.append((l_center,  y_val))
+    window_centroids_left.append((r_center,  y_val))
     
     l_shift = 0
     r_shift = 0
@@ -45,10 +48,13 @@ def find_window_centroids(image, window_width, window_height, margin, minpix = 1
     r_miss = 0
     
     
+    
     # Go through each layer looking for max pixel locations
     for level in range(1,(int)(image.shape[0]/window_height)):
+        y_val = (N-(level+1))*window_height + window_height/2
+        
         # convolve the window into the vertical slice of the image
-        image_layer = np.sum(image[int(image.shape[0]-(level+1)*window_height):int(image.shape[0]-level*window_height),:], axis=0)
+        image_layer = np.sum(image[int(N-(level+1)*window_height):int(N-level*window_height),:], axis=0)
         conv_signal = np.convolve(window, image_layer)
         # Find the best left centroid by using past left center as a reference
         # Use window_width/2 as offset because convolution signal reference is at right side of window, not center of window
@@ -61,7 +67,7 @@ def find_window_centroids(image, window_width, window_height, margin, minpix = 1
             prev_l_center = l_center
             l_center = np.argmax(l_conv)+l_min_index-offset
             l_shift = l_center - prev_l_center
-            window_centroids_left.append(l_center)
+            window_centroids_left.append((l_center, y_val))
             l_miss = 0
         else:      
             l_center = int(min(max(l_center + l_shift, 0), image.shape[1]))
@@ -77,15 +83,14 @@ def find_window_centroids(image, window_width, window_height, margin, minpix = 1
             prev_r_center = r_center
             r_center = np.argmax(r_conv)+r_min_index-offset
             r_shift = r_center - prev_r_center
-            window_centroids_right.append(r_center)
+            window_centroids_right.append((r_center, y_val))
             r_miss = 0
         else:
             
             r_center = int(min(max(r_center + r_shift, 0), image.shape[1]))
             window_centroids_right.append(None)
             r_miss += 1
-            
-        
+    
 
     return window_centroids_left, window_centroids_right
 
@@ -101,12 +106,12 @@ def map_windows_to_centroids(window_centroids_left, window_centroids_right, wind
         for level in range(0,len(window_centroids_left)):
             # Window_mask is a function to draw window areas
             if (not window_centroids_left[level] is None):
-                l_mask = window_mask(window_width,window_height,warped_e,window_centroids_left[level],level)
+                l_mask = window_mask(window_width,window_height,warped_e,window_centroids_left[level])
                 # Add graphic points from window mask here to total pixels found 
                 l_points[(l_points == 255) | ((l_mask == 1) ) ] = 255
             
             if (not window_centroids_right[level] is None):
-                r_mask = window_mask(window_width,window_height,warped_e,window_centroids_right[level],level)
+                r_mask = window_mask(window_width,window_height,warped_e,window_centroids_right[level])
                 r_points[(r_points == 255) | ((r_mask == 1) ) ] = 255
 
         # Draw the results
@@ -283,6 +288,8 @@ class LaneDetector:
     
     cal_save = "cal_data.p"
     
+    dbg_output = "detector_dbg"
+    
     def __init__(self, max_frames, cal_dir):
         self.left_curvatures = []
         self.right_curvatures = []
@@ -293,6 +300,9 @@ class LaneDetector:
         self.detected = [] 
         self.max_frames = max_frames
         (self.objectPoints, self.imagePoints, self.M, self.Minv) = self.get_calibration_data(cal_dir, self.cal_save, self.transform_src, self.transform_dst)
+        
+        if not os.path.exists(self.dbg_output):
+            os.makedirs(self.dbg_output)
     
     def getCalibrationPoints(self, fname):
         # Try various values of nx and ny
@@ -343,11 +353,11 @@ class LaneDetector:
     
     def fitPolynomial(self, window_centroids_left, window_centroids_right, window_height):
         N = len(window_centroids_left)
-        left_x = [c for c in window_centroids_left if c is not None ]
-        left_y = [(N-1-i)*window_height + window_height/2 for i in range(len(window_centroids_left)) if window_centroids_left[i] is not None]
+        left_x = [c[0] for c in window_centroids_left if c is not None ]
+        left_y = [c[1] for c in window_centroids_left if c is not None]
         
-        right_x = [c for c in window_centroids_right if c is not None ]
-        right_y = [(N-1-i)*window_height + window_height/2 for i in range(len(window_centroids_right)) if window_centroids_right[i] is not None]
+        right_x = [c[0] for c in window_centroids_right if c is not None ]
+        right_y = [c[1] for c in window_centroids_right if c is not None]
         
         left_fit = np.polyfit(left_y, left_x, 2)
         right_fit = np.polyfit(right_y, right_x, 2)
@@ -435,7 +445,7 @@ class LaneDetector:
         
         width_thresh = 0.4      # Road width mismatch in meters 
         curv_lr_thresh = 0.3   # Curvature mismatch between left and right as a fraction
-        curve_t_thresh = 0.2    # Curvature mismatch in time as a fraction
+        curve_t_thresh = 0.4    # Curvature mismatch in time as a fraction
         
         curv_lr_mismatch = abs((left_curverad - right_curverad)/max([left_curverad, right_curverad]))
         
@@ -470,7 +480,7 @@ class LaneDetector:
         
         
         
-    def run_pipeline(self, image, verbose=False, ofname_prefix=None):
+    def run_pipeline(self, image, verbose=False, ofname_prefix=None, dump_raw_range=None):
         if verbose and ofname_prefix is None:
             print("Warning: asking for verbose output, but no prefix is given. Skipping verbose mode...")
             verbose = False
@@ -533,9 +543,14 @@ class LaneDetector:
 
    
         result = self.addHUD(result)
+        
+        if (dump_raw_range is not None) and len(self.detected) > dump_raw_range[0] and len(self.detected) < dump_raw_range[1]:
+            dbg_fname = "raw_image_f{}_{}.jpg".format(len(self.detected), self.detected[-1])
+            cvt_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            cv2.imwrite(os.path.join(self.dbg_output, dbg_fname), cvt_image)
 
         if verbose:
-            test_before_after(image, result, prefix + "invplt.jpg")
+            test_before_after(image, result, prefix + "invplt.jpg")          
         
         plt.close('all')
         
@@ -548,8 +563,6 @@ def test_pipeline(cal_dir, test_dir = "test_images"):
     detector = LaneDetector(1, cal_dir)
     
     for f in os.listdir(test_dir):
-        if not ("test6" in f or "test1" in f):
-            continue
         if not f.endswith("jpg"):
             continue
         print ("Detecting lanes in " + f)
@@ -560,17 +573,22 @@ def test_pipeline(cal_dir, test_dir = "test_images"):
     
 def process_image(image):
     global g_detector
-    return g_detector.run_pipeline(image, verbose=False)
+    global g_dump_range
+    return g_detector.run_pipeline(image, verbose=False, dump_raw_range=g_dump_range)
       
 def process_video(cal_dir, video_fname):
     # Need to define globals as VideoFileClip.fl_image only accepts one parameter
     global g_detector
+    global g_dump_range
 
     clip = VideoFileClip(video_fname)
     max_frames = clip.fps * (clip.duration+1)
+    #g_dump_range = (38 * clip.fps, 40* clip.fps)
+    g_dump_range = None
+    print (g_dump_range)
     g_detector = LaneDetector(max_frames, cal_dir)
     out_clip = clip.fl_image(process_image)
-    out_clip.write_videofile('output_w_santizer_strict.mp4', audio=False)
+    out_clip.write_videofile('output_w_santizer_fixup.mp4', audio=False)
     print(g_detector.detected)
     
     
@@ -583,7 +601,7 @@ if __name__ == "__main__":
     
     video_fname = "project_video.mp4"
     
-    #test_pipeline(cal_dir)
+    #test_pipeline(cal_dir, "detector_dbg")
     process_video(cal_dir, video_fname)
     
     
