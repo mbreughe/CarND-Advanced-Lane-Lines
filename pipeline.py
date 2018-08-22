@@ -40,7 +40,7 @@ def find_window_centroids(image, window_width, window_height, margin, minpix = 1
     l_shift = 0
     r_shift = 0
     
-    miss_thresh = 4
+    miss_thresh = 6
     l_miss = 0
     r_miss = 0
     
@@ -49,10 +49,11 @@ def find_window_centroids(image, window_width, window_height, margin, minpix = 1
         y_val = (N-(level+1))*window_height + window_height/2
         
         # convolve the window into the vertical slice of the image
-        image_layer = np.sum(image[int(N-(level+1)*window_height):int(N-level*window_height),:], axis=0)
+        image_layer = np.sum(image[int((N-(level+1))*window_height):int((N-level)*window_height),:], axis=0)
         conv_signal = np.convolve(window, image_layer)
         # Find the best left centroid by using past left center as a reference
-        # Use window_width/2 as offset because convolution signal reference is at right side of window, not center of window
+        # It was recommend to use window_width/2 as offset because convolution signal reference is at right side of window, not center of window.
+        # However, I see better results for offset = 0
         offset = window_width/2
         l_min_index = int(max(l_center+offset-margin,0))
         l_max_index = int(min(l_center+offset+margin,image.shape[1]))
@@ -83,13 +84,16 @@ def find_window_centroids(image, window_width, window_height, margin, minpix = 1
             r_center = int(min(max(r_center + r_shift, 0), image.shape[1]))
             r_miss += 1
             
+    detected = True 
     if len(window_centroids_left) == 0:
         window_centroids_left = [(l_center_init, (N - (level + 1)) * window_height + window_height/2) for level in range(0, N)]
+        detected = False
      
     if len(window_centroids_right) == 0:
         window_centroids_right = [(r_center_init, (N - (level + 1)) * window_height + window_height/2) for level in range(0, N)]
+        detected = False
 
-    return window_centroids_left, window_centroids_right
+    return detected, window_centroids_left, window_centroids_right
 
 def map_windows_to_centroids(window_centroids_left, window_centroids_right, window_width, window_height, warped_e):    
     # Points used to draw all the left and right windows
@@ -150,9 +154,9 @@ def sobel(image):
     dir_thresh = (0.2, 1.7)
 
     # Apply each of the thresholding functions
-    gradx = sobel_abs_axis(image, orient='x', sobel_kernel=ksize, thresh=x_thresh)
-    grady = sobel_abs_axis(image, orient='y', sobel_kernel=ksize, thresh=y_thresh)
-    mag_binary = sobel_magnitude(image, sobel_kernel=ksize, mag_thresh=mag_t)
+   # gradx = sobel_abs_axis(image, orient='x', sobel_kernel=ksize, thresh=x_thresh)
+   # grady = sobel_abs_axis(image, orient='y', sobel_kernel=ksize, thresh=y_thresh)
+   # mag_binary = sobel_magnitude(image, sobel_kernel=ksize, mag_thresh=mag_t)
     dir_binary = sobel_dir(image, sobel_kernel=ksize, thresh=dir_thresh)
     color_grad = sobel_color(image)
     
@@ -161,14 +165,14 @@ def sobel(image):
     #combined[((mag_binary == 1) & (dir_binary == 1))] = 1
     #combined[(((mag_binary == 1) & (dir_binary == 1)) | (color_grad == 1))] = 1
     
-    combined[(color_grad == 1) & (gradx == 1)] = 1
-    #combined[(color_grad == 1)] = 1
+    #combined[(color_grad == 1) & (gradx == 1)] = 1
+    combined[(color_grad == 1)] = 1
     
     
     #return color_grad
     return combined
     
-def sobel_color(image, s_thresh=(95, 255), h_thresh = (0, 255), rgb_min = 200):
+def sobel_color(image, s_thresh=(100, 255), h_thresh = (10, 25), rgb_min = 200):
     hls = cv2.cvtColor(image, cv2.COLOR_RGB2HLS)
     s_channel = hls[:,:,2]
     h_channel = hls[:,:,0]
@@ -179,6 +183,7 @@ def sobel_color(image, s_thresh=(95, 255), h_thresh = (0, 255), rgb_min = 200):
     & (h_channel >= h_thresh[0]) & (h_channel <= h_thresh[1])] = 1
     
     is_white = np.zeros_like(s_channel)
+    
     is_white[(image[:,:,0] > rgb_min) & (image[:,:,1] > rgb_min) & (image[:,:,2] > rgb_min)] = 1
     
     color_combo = np.zeros_like(s_channel)
@@ -269,9 +274,10 @@ class LaneDetector:
     transform_dst = np.array([[256, 678], [256, 472], [1054, 472], [1054, 678]], np.float32)
     
     # Search window settings
-    window_width = 50 
-    window_height = 60 # Break image into 9 vertical layers since image height is 720
-    margin = 75 # How much to slide left and right for searching
+    window_width = 35 
+    window_height = 35 
+    margin = 200 # How much to slide left and right for searching
+    
     
     avg_wind = 30
     
@@ -426,14 +432,17 @@ class LaneDetector:
         self.running_avgs.append(self.cur_running_avg)
         
     
-    def sanity_check(self, left_fit_real, right_fit_real, min_y, max_y, left_curverad, right_curverad):
+    def sanity_check(self, detected, left_fit_real, right_fit_real, min_y, max_y, left_curverad, right_curverad):
         # Skip checking if we didn't see enough frames
         if len(self.left_curvatures) < self.avg_wind:
             return (True, True)
+            
+        if not detected:
+            return (False, False)
         
         width_thresh = 0.4      # Road width mismatch in meters 
-        curv_lr_thresh = 0.3   # Curvature mismatch between left and right as a fraction
-        curve_t_thresh = 0.4    # Curvature mismatch in time as a fraction
+        curv_lr_thresh = 1   # Curvature mismatch between left and right as a fraction
+        curve_t_thresh = 1    # Curvature mismatch in time as a fraction
         
         curv_lr_mismatch = abs((left_curverad - right_curverad)/max([left_curverad, right_curverad]))
         
@@ -484,15 +493,14 @@ class LaneDetector:
         if verbose:
             c_edges = np.dstack(( np.zeros_like(edges), edges, np.zeros_like(edges))) * 255
             c_edges = c_edges.astype(np.uint8)
-            combined = c_edges | image
-            test_before_after(image, combined, prefix + "sobel.jpg")
+            test_before_after(image, c_edges, prefix + "sobel.jpg")
         
         # warp perspective
         img_size = (und.shape[1], und.shape[0])
         warped_e = cv2.warpPerspective(edges, self.M, img_size, flags=cv2.INTER_NEAREST)
         
         # detect lanes in warped space
-        window_centroids_left, window_centroids_right = find_window_centroids(warped_e, self.window_width, self.window_height, self.margin)
+        detected, window_centroids_left, window_centroids_right = find_window_centroids(warped_e, self.window_width, self.window_height, self.margin)
         left_fit, right_fit, left_fit_real, right_fit_real, left_y_real, right_y_real = self.fitPolynomial(window_centroids_left, window_centroids_right, self.window_height)
         max_y = min(max(left_y_real), max(right_y_real))
         min_y = max(min(left_y_real), min(right_y_real))
@@ -500,7 +508,7 @@ class LaneDetector:
         
         left_curverad, right_curverad = calcCurvature(left_fit_real, right_fit_real, max_y)
         
-        left_pass, right_pass = self.sanity_check(left_fit_real, right_fit_real, min_y, max_y, left_curverad, right_curverad)
+        left_pass, right_pass = self.sanity_check(detected, left_fit_real, right_fit_real, min_y, max_y, left_curverad, right_curverad)
         
         if left_pass and right_pass:
             self.detected.append(".")
@@ -543,16 +551,43 @@ class LaneDetector:
         plt.close('all')
         
         return result
+        
+def dumpVideoAtRanges(video_fname, sec_ranges, odir):
+    if not os.path.exists(odir):
+        os.makedirs(odir)
+        
+    set_no = 0
+    for (low, high) in sec_ranges:
+        clip = VideoFileClip(video_fname)
+        clip = clip.cutout(high, clip.duration)
+        clip = clip.cutout(0, low)
+        fname = os.path.join(odir, "frame_s_{}_%03d.jpg".format(set_no))
+        clip.write_images_sequence(fname)
+        set_no += 1
+        
 
 # Test out following snippets:        
-# 22-24
+# 22-25
 # 38 - 40    
 def test_pipeline(cal_dir, test_dir = "test_images"):
     detector = LaneDetector(1, cal_dir)
     
+    #names = ["0_015", "0_016", "0_018", "0_019", "0_020", "0_023", "0_024", "0_046", "0_049", "0_052", "0_056", "0_057", "1_028", "1_039","1_046","1_047","1_049"]
+
+    names = [""]
+    
     for f in os.listdir(test_dir):
         if not f.endswith("jpg"):
             continue
+        
+        found = False
+        for n in names:
+            if n in f:
+                found = True
+                break
+        if not found:
+            continue
+        
         print ("Detecting lanes in " + f)
         fname = os.path.join(test_dir, f)
         image = mpimg.imread(fname)
@@ -576,22 +611,23 @@ def process_video(cal_dir, video_fname):
     print (g_dump_range)
     g_detector = LaneDetector(max_frames, cal_dir)
     out_clip = clip.fl_image(process_image)
-    out_clip.write_videofile('output_w_santizer_fixup_nobranches.mp4', audio=False)
+    out_clip.write_videofile('output_loose.mp4', audio=False)
     print(g_detector.detected)
     
     
     #for i in np.linspace(1,2,30):
     #    clip.save_frame("additional/frame_{}.jpg".format(i), t='00:00:{}'.format(i))
 
-
 if __name__ == "__main__":
     cal_dir = "camera_cal"    
     
     video_fname = "project_video.mp4"
     
-    #test_pipeline(cal_dir, "detector_dbg")
+    #test_pipeline(cal_dir, "special_attention")
     process_video(cal_dir, video_fname)
     
+    #dumpVideoAtRanges(video_fname, [(22,25), (38,40)], "frame_dump")
+    #test_pipeline(cal_dir, "frame_dump")
     
     
     
