@@ -40,7 +40,7 @@ def find_window_centroids(image, window_width, window_height, margin, minpix = 1
     l_shift = 0
     r_shift = 0
     
-    miss_thresh = 6
+    miss_thresh = 10
     l_miss = 0
     r_miss = 0
     
@@ -148,7 +148,7 @@ def sobel(image):
      
     # Choose a Sobel kernel size
     ksize = 31 # Choose a larger odd number to smooth gradient measurements
-    x_thresh = (10, 255)
+    x_thresh = (40, 255)
     y_thresh = (20, 100)
     mag_t = (70, 255)
     dir_thresh = (0.2, 1.7)
@@ -165,7 +165,7 @@ def sobel(image):
     #combined[((mag_binary == 1) & (dir_binary == 1))] = 1
     #combined[(((mag_binary == 1) & (dir_binary == 1)) | (color_grad == 1))] = 1
     
-    #combined[(color_grad == 1) & (gradx == 1)] = 1
+    #combined[(color_grad == 1) | (gradx == 1)] = 1
     combined[(color_grad == 1)] = 1
     
     
@@ -274,9 +274,9 @@ class LaneDetector:
     transform_dst = np.array([[256, 678], [256, 472], [1054, 472], [1054, 678]], np.float32)
     
     # Search window settings
-    window_width = 35 
+    window_width = 60 
     window_height = 35 
-    margin = 200 # How much to slide left and right for searching
+    margin = 100 # How much to slide left and right for searching
     
     
     avg_wind = 30
@@ -441,8 +441,8 @@ class LaneDetector:
             return (False, False)
         
         width_thresh = 0.4      # Road width mismatch in meters 
-        curv_lr_thresh = 1   # Curvature mismatch between left and right as a fraction
-        curve_t_thresh = 1    # Curvature mismatch in time as a fraction
+        curv_lr_thresh = 0.7   # Curvature mismatch between left and right as a fraction
+        curve_t_thresh = 0.7        # Curvature mismatch in time as a fraction
         
         curv_lr_mismatch = abs((left_curverad - right_curverad)/max([left_curverad, right_curverad]))
         
@@ -574,7 +574,8 @@ def test_pipeline(cal_dir, test_dir = "test_images"):
     
     #names = ["0_015", "0_016", "0_018", "0_019", "0_020", "0_023", "0_024", "0_046", "0_049", "0_052", "0_056", "0_057", "1_028", "1_039","1_046","1_047","1_049"]
 
-    names = [""]
+    names = ["0_035", "0_046", "0_052", "0_064"]
+    #names = [""]
     
     for f in os.listdir(test_dir):
         if not f.endswith("jpg"):
@@ -611,7 +612,7 @@ def process_video(cal_dir, video_fname):
     print (g_dump_range)
     g_detector = LaneDetector(max_frames, cal_dir)
     out_clip = clip.fl_image(process_image)
-    out_clip.write_videofile('output_loose.mp4', audio=False)
+    out_clip.write_videofile('output_lessstrict_nogradx.mp4', audio=False)
     print(g_detector.detected)
     
     
@@ -626,8 +627,8 @@ if __name__ == "__main__":
     #test_pipeline(cal_dir, "special_attention")
     process_video(cal_dir, video_fname)
     
-    #dumpVideoAtRanges(video_fname, [(22,25), (38,40)], "frame_dump")
-    #test_pipeline(cal_dir, "frame_dump")
+    #dumpVideoAtRanges(video_fname, [(39,42)], "frame_dump_2")
+    #test_pipeline(cal_dir, "frame_dump_2")
     
     
     
