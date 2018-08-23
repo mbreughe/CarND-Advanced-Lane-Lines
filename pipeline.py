@@ -123,7 +123,7 @@ def map_windows_to_centroids(window_centroids_left, window_centroids_right, wind
     
     return output
     
-def markLanes(img, warped_e, Minv, left_fit, right_fit, height_frac = 0.7):
+def markLanesAndCalcCenter(img, warped_e, Minv, left_fit, right_fit, height_frac = 0.7):
     ploty = np.linspace(int((1-height_frac) * warped_e.shape[0]), warped_e.shape[0]-1, int(height_frac * warped_e.shape[0]) )
     left_fitx = left_fit[0]*ploty**2 + left_fit[1]*ploty + left_fit[2]      # (720,)
     right_fitx = right_fit[0]*ploty**2 + right_fit[1]*ploty + right_fit[2]  # (720,2)
@@ -141,7 +141,10 @@ def markLanes(img, warped_e, Minv, left_fit, right_fit, height_frac = 0.7):
     # Warp the blank back to original image space using inverse perspective matrix (Minv)
     newwarp = cv2.warpPerspective(color_warp, Minv, (img.shape[1], img.shape[0])) 
     
-    return newwarp
+    lane_center = (left_fitx[-1] + right_fitx[-1])/2
+    center_offset = (warped_e.shape[1]/2 - lane_center)
+    
+    return center_offset, newwarp
     
 
 def sobel(image):
@@ -288,6 +291,7 @@ class LaneDetector:
     def __init__(self, max_frames, cal_dir):
         self.left_curvatures = []
         self.right_curvatures = []
+        self.curvatures = []
         self.running_avgs = []
         self.running_tot = 0
         self.left_fit = []
@@ -390,15 +394,23 @@ class LaneDetector:
         plt.subplots_adjust(left=0., right=1, top=0.9, bottom=0.)
         plt.savefig(ofname)        
 
-    def addHUD(self, result):
+    def addHUD(self, result, center_offset_pix):
         f, ax = plt.subplots(1, figsize=(8,1.5))
         #ax = axs[0]
         ax.figsize=(8,1.5)
         ax.set_xlim([0, self.max_frames])
         ax.set_ylim([0, 3000])
         
-        plt.plot(self.right_curvatures)
-        plt.plot(self.running_avgs)
+        plt.plot(self.curvatures, label="Instant curvature")
+        plt.plot(self.running_avgs, label="Running avg of curvature")
+        plt.legend(bbox_to_anchor=(0., -0.2, 1., .102), loc=3,
+           ncol=2, mode="expand", borderaxespad=0.)
+        plt.tick_params( 
+            axis='x',          # changes apply to the x-axis
+            which='both',      # both major and minor ticks are affected
+            bottom=False,      # ticks along the bottom edge are off
+            top=False,         # ticks along the top edge are off
+            labelbottom=False) # labels along the bottom edge are off
         ax.figure.canvas.draw()
 
         # Now we can save it to a numpy array.
@@ -409,27 +421,36 @@ class LaneDetector:
         
         result[data.shape[0]:data.shape[0]+100, : data.shape[1],:] = 255 
         
-        cv2.putText(result, "Curvature: {} m".format(int(self.cur_running_avg)), (30, 180), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (250, 80, 0), lineType=cv2.LINE_AA)
-        cv2.putText(result, "L Curvature: {} m".format(int(self.left_curvatures[-1])), (30, 200), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (250, 80, 0), lineType=cv2.LINE_AA)
-        cv2.putText(result, "R Curvature: {} m".format(int(self.right_curvatures[-1])), (30, 220), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (250, 80, 0), lineType=cv2.LINE_AA)
+        center = center_offset_pix * self.xm_per_pix
+        if center < 0:
+            center = "Vehicle is {0:.3f}m left of center".format(abs(center))
+        else:
+            center = "Vehicle is {0:.3f}m left of center".format(center)
+        
+        cv2.putText(result, "Curvature: {} m".format(int(self.cur_running_avg)), (30, 190), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (250, 80, 0), lineType=cv2.LINE_AA)
+        cv2.putText(result, center, (30, 230), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (250, 80, 0), lineType=cv2.LINE_AA)
         
         return result
         
     def updateFrames(self, left_curverad, right_curverad, left_fit, right_fit):
+        cur_curvature = (left_curverad + right_curverad)/2
         self.left_curvatures.append(left_curverad)
         self.right_curvatures.append(right_curverad)
+        self.curvatures.append(cur_curvature)
         
         self.left_fit.append(left_fit)
         self.right_fit.append(right_fit)
       
         num_frames = len(self.left_curvatures)
-        self.running_tot += (left_curverad + right_curverad)/2
+        
+        self.running_tot += cur_curvature
         
         if num_frames > self.avg_wind:       
             self.running_tot -= (self.left_curvatures[-(self.avg_wind+1)] + self.right_curvatures[-(self.avg_wind+1)])/2
         
         self.cur_running_avg = self.running_tot/min(self.avg_wind, num_frames)
         self.running_avgs.append(self.cur_running_avg)
+        
         
     
     def sanity_check(self, detected, left_fit_real, right_fit_real, min_y, max_y, left_curverad, right_curverad):
@@ -532,13 +553,13 @@ class LaneDetector:
             self.plot_polynomials_in_warp_space(image, warped_e, window_centroids_left, window_centroids_right, left_fit, right_fit, prefix + "detect.jpg")
 
         # mark lanes
-        warped_marking = markLanes(image, warped_e, self.Minv, left_fit, right_fit)
+        center_offset_pix, warped_marking = markLanesAndCalcCenter(image, warped_e, self.Minv, left_fit, right_fit)
         
         # Combine the result with the original image
         result = cv2.addWeighted(und, 1, warped_marking, 0.3, 0)
 
    
-        result = self.addHUD(result)
+        result = self.addHUD(result, center_offset_pix)
         
         if (dump_raw_range is not None) and len(self.detected) > dump_raw_range[0] and len(self.detected) < dump_raw_range[1]:
             dbg_fname = "raw_image_f{}_{}.jpg".format(len(self.detected), self.detected[-1])
@@ -572,21 +593,8 @@ def dumpVideoAtRanges(video_fname, sec_ranges, odir):
 def test_pipeline(cal_dir, test_dir = "test_images"):
     detector = LaneDetector(1, cal_dir)
     
-    #names = ["0_015", "0_016", "0_018", "0_019", "0_020", "0_023", "0_024", "0_046", "0_049", "0_052", "0_056", "0_057", "1_028", "1_039","1_046","1_047","1_049"]
-
-    names = ["0_035", "0_046", "0_052", "0_064"]
-    #names = [""]
-    
     for f in os.listdir(test_dir):
         if not f.endswith("jpg"):
-            continue
-        
-        found = False
-        for n in names:
-            if n in f:
-                found = True
-                break
-        if not found:
             continue
         
         print ("Detecting lanes in " + f)
@@ -612,7 +620,7 @@ def process_video(cal_dir, video_fname):
     print (g_dump_range)
     g_detector = LaneDetector(max_frames, cal_dir)
     out_clip = clip.fl_image(process_image)
-    out_clip.write_videofile('output_lessstrict_nogradx.mp4', audio=False)
+    out_clip.write_videofile('result.mp4', audio=False)
     print(g_detector.detected)
     
     
@@ -624,7 +632,7 @@ if __name__ == "__main__":
     
     video_fname = "project_video.mp4"
     
-    #test_pipeline(cal_dir, "special_attention")
+    #test_pipeline(cal_dir, "test_images")
     process_video(cal_dir, video_fname)
     
     #dumpVideoAtRanges(video_fname, [(39,42)], "frame_dump_2")
