@@ -117,7 +117,7 @@ An example can be seen below, before and after thresholding is applied:
 
 #### 3. Describe how (and identify where in your code) you performed a perspective transform and provide an example of a transformed image.
 
-I opened a test image that contains straight lines in paint.net. I carefully identified points that, in a birds-eye-view should be rectangular, but are on a trapezoid in the image. I hard-coded the values of the image (source) as class variables of my LaneDetector class on line 250. Further, I hard-coded the destination points of where I want the source points to show up after the transformation. These points can also be found in the table below.
+I opened a test image that contains straight lines in paint.net. I carefully identified points that, in a birds-eye-view should be rectangular, but are on a trapezoid in the image. I hard-coded the values of the image (source) as class variables of my LaneDetector class on line 250. Further, I hard-coded the destination points of where I want the source points to show up after the transformation. 
 
 Because the transformation is the same in all the images, we only need to compute the transformation matrices, M and Minv once. Therefore it is part of the get\_calibration\_data function on lines 322 to 351 in pipeline.py, which gets called only once, from LaneDetector.\_\_init\_\_.
 
@@ -158,7 +158,7 @@ The image below is the result of all the previous steps. It marks out the identi
 
 #### 1. Provide a link to your final video output.  Your pipeline should perform reasonably well on the entire project video (wobbly lines are ok but no catastrophic failures that would cause the car to drive off the road!).
 
-Here's a [link to my video result](./video.mp4)
+Here's a [link to my video result](./result.mp4)
 
 ---
 
