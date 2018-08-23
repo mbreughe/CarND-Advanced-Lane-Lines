@@ -18,8 +18,10 @@ The goals / steps of this project are the following:
 [//]: # (Image References)
 
 [undistort]: ./images/test2_undistort.jpg "Undistorted"
-[color_thresh]: ./images/test2_Sobel.jpg "Color thresholded"
+[color_thresh]: ./images/test2_sobel.jpg "Color thresholded"
 [perspective]: ./images/test2_transform.jpg "Perspective transform"
+[warp_detect]: ./images/test2_detect.jpg "Lane line detection"
+[result]: ./images/test2_invplt.jpg "Result"
 [video1]: ./project_video.mp4 "Video"
 
 ## [Rubric](https://review.udacity.com/#!/rubrics/571/view) Points
@@ -69,19 +71,30 @@ By using the cv2.warpPerspective we can see that the lane lines are indeed paral
 
 #### 4. Describe how (and identify where in your code) you identified lane-line pixels and fit their positions with a polynomial?
 
-Then I did some other stuff and fit my lane lines with a 2nd order polynomial kinda like this:
+I used the "find\_window\_centroids" on line 18 through 96 in pipeline.py. This is a (convolution based) sliding window approach. We slice the image from bottom to top and identify the portion of the two lane lines in every slice. This is done by sliding two windows (one per lane line) from left to right whithin a given margin.
 
-![alt text][image5]
+Besides tuning parameters, I made several changes to what the course taught us:
+* I am not using the initial left and right centers. These are the average postion of the the lane lines of the bottom quarter of the image. I only use these to find around what location I should start looking. For bends with a very high curvature this tends to be helpful.
+* I added a threshold for the minimum amount of pixels we need to detect in a lane line
+* When no pixels are detected as being part of a lane line in a vertical slice, I don't add a center. 
+* I keep track of strides: in case we didn't detect any pixels in a slice, we do want to make sure that in a next slice, we can shift far enough. (Remember that we can only slide our windows whithin a given margin).
+* I also keep track of how many slices in a row did not find any lane lines, and stop detecting if we missed too many of them. Otherwise, we run into the issue that we might end up picking the last couple of slices from the other lane line.
+
+After detecting points that belong to lane lines, I fit a second order polynomial through them. This is done in the fitPolynomial function on lines 353 through 371.
+
+In the image below, you can see the perspective transformed image on the left, and the detected lanes on the right, along whith activated pixels from color thresholding.
+
+![Lane line detection][warp_detect]
 
 #### 5. Describe how (and identify where in your code) you calculated the radius of curvature of the lane and the position of the vehicle with respect to center.
 
-I did this in lines # through # in my code in `my_other_file.py`
+Besides fitting a polynomial on pixel values, I also fitted a polynomial for each lane line in real space values. This allows me to calculate the curvature in real values, through the calcCurvature function on line 263 through 268. I calculate curvature for both left and right lane, and then take the average. Further, I keep track of a running average over 2 seconds of video. These last two steps are done in the updateFrames function on line 435 through 452.
 
 #### 6. Provide an example image of your result plotted back down onto the road such that the lane area is identified clearly.
 
-I implemented this step in lines # through # in my code in `yet_another_file.py` in the function `map_lane()`.  Here is an example of my result on a test image:
+The image below is the result of all the previous steps. It marks out the identified lane and lists curvature. Please ignore the graph on this image. This is only meaningful in the video where curvature is recorded over time.
 
-![alt text][image6]
+![Result][result]
 
 ---
 
@@ -97,4 +110,10 @@ Here's a [link to my video result](./project_video.mp4)
 
 #### 1. Briefly discuss any problems / issues you faced in your implementation of this project.  Where will your pipeline likely fail?  What could you do to make it more robust?
 
-Here I'll talk about the approach I took, what techniques I used, what worked and why, where the pipeline might fail and how I might improve it if I were going to pursue this project further.  
+I faced several issues during the project of which I learend some useful lessons:
+1. Visualize every step of the pipeline. This helps debugging. Initially, I didn't overlay my warped image with the polynomials that I found. I spent lots of time finetuning other parameters, only to find out that I was plotting polynomials from top to bottom of the image instead of vice versa.
+2. Having a sort of sanity check in place is really helpful. It is tough to perfectly cover every single image. If you can tell the program something about the quality of lane detection, detection in previous frames can at least be a backup.
+
+Improvements:
+* Finding around previously perfectly detected lane lines could improve the accuracy of my lane detection. Currently, I redo the searching for every frame.
+* I've spent a lot of time tuning the various paramerers manually (sobel parameters, color thresholds, window sizes). A more structural approach would be helpful here. E.g., a GUI where you can turn knobs and see the impact on the detection and various intermediate steps.
