@@ -22,7 +22,7 @@ The goals / steps of this project are the following:
 [perspective]: ./images/test2_transform.jpg "Perspective transform"
 [warp_detect]: ./images/test2_detect.jpg "Lane line detection"
 [result]: ./images/test2_invplt.jpg "Result"
-[video1]: ./project_video.mp4 "Video"
+[video1]: ./result.mp4 "Video"
 
 ## [Rubric](https://review.udacity.com/#!/rubrics/571/view) Points
 
@@ -46,7 +46,7 @@ TBD
 
 #### 1. Provide an example of a distortion-corrected image.
 
-Below is an image before and after distortation is applied:
+Below is an image before and after distortion-correction is applied:
 ![undistort][undistort]
 
 
@@ -61,9 +61,9 @@ An example can be seen below, before and after thresholding is applied:
 
 #### 3. Describe how (and identify where in your code) you performed a perspective transform and provide an example of a transformed image.
 
-I opened a test image that contains straight lines in paint.net. I carefully identified points that, in a birds-eye-view should be rectangular, but are on a trapezoid in the image. I hard-coded the values of the image (source) as class values of my LaneDetector class on line 250. Further, I hard-coded the destination points of where I want the source points to show up after the transformation. These points can also be found in the table below.
+I opened a test image that contains straight lines in paint.net. I carefully identified points that, in a birds-eye-view should be rectangular, but are on a trapezoid in the image. I hard-coded the values of the image (source) as class variables of my LaneDetector class on line 250. Further, I hard-coded the destination points of where I want the source points to show up after the transformation. These points can also be found in the table below.
 
-Because the transformation is the same in all the images, we only need to compute the transformation matrices, M and Minv once. Therefore it is part of the get\_calibration\_data functio non lines 322 to 351 in pipeline.py, which gets called only once, from LaneDetector.\_\_init\_\_.
+Because the transformation is the same in all the images, we only need to compute the transformation matrices, M and Minv once. Therefore it is part of the get\_calibration\_data function on lines 322 to 351 in pipeline.py, which gets called only once, from LaneDetector.\_\_init\_\_.
 
 By using the cv2.warpPerspective we can see that the lane lines are indeed parallel. See also the example below.
 
@@ -78,7 +78,7 @@ Besides tuning parameters, I made several changes to what the course taught us:
 * I added a threshold for the minimum amount of pixels we need to detect in a lane line
 * When no pixels are detected as being part of a lane line in a vertical slice, I don't add a center. 
 * I keep track of strides: in case we didn't detect any pixels in a slice, we do want to make sure that in a next slice, we can shift far enough. (Remember that we can only slide our windows whithin a given margin).
-* I also keep track of how many slices in a row did not find any lane lines, and stop detecting if we missed too many of them. Otherwise, we run into the issue that we might end up picking the last couple of slices from the other lane line.
+* I also keep track of how many slices in a row did not find any lane lines, and stop detecting if we missed too many of them. Otherwise, we run into the issue that we might end up picking pixels from the other lane.
 
 After detecting points that belong to lane lines, I fit a second order polynomial through them. This is done in the fitPolynomial function on lines 353 through 371.
 
@@ -102,7 +102,7 @@ The image below is the result of all the previous steps. It marks out the identi
 
 #### 1. Provide a link to your final video output.  Your pipeline should perform reasonably well on the entire project video (wobbly lines are ok but no catastrophic failures that would cause the car to drive off the road!).
 
-Here's a [link to my video result](./project_video.mp4)
+Here's a [link to my video result](./video.mp4)
 
 ---
 
@@ -110,10 +110,10 @@ Here's a [link to my video result](./project_video.mp4)
 
 #### 1. Briefly discuss any problems / issues you faced in your implementation of this project.  Where will your pipeline likely fail?  What could you do to make it more robust?
 
-I faced several issues during the project of which I learend some useful lessons:
-1. Visualize every step of the pipeline. This helps debugging. Initially, I didn't overlay my warped image with the polynomials that I found. I spent lots of time finetuning other parameters, only to find out that I was plotting polynomials from top to bottom of the image instead of vice versa.
-2. Having a sort of sanity check in place is really helpful. It is tough to perfectly cover every single image. If you can tell the program something about the quality of lane detection, detection in previous frames can at least be a backup.
+I faced several issues during the project of which I learned some useful lessons:
+1. Visualize every step of the pipeline. This helps debugging. Initially, I didn't overlay my warped image with the polynomials that I found. I spent lots of time finetuning other parameters, only to find out that I was plotting polynomials from top to bottom of the image instead of bottom to top (resulting in very weird looking lanes).
+2. Having a sort of sanity check in place is really helpful. It is tough to perfectly cover every single frame. If you can tell the program something about the quality of lane detection, detection in previous frames can at least be a backup.
 
 Improvements:
-* Finding around previously perfectly detected lane lines could improve the accuracy of my lane detection. Currently, I redo the searching for every frame.
+* Searching around previously perfectly detected lane lines could improve the accuracy of my lane detection. Currently, I redo the searching for every frame.
 * I've spent a lot of time tuning the various paramerers manually (sobel parameters, color thresholds, window sizes). A more structural approach would be helpful here. E.g., a GUI where you can turn knobs and see the impact on the detection and various intermediate steps.

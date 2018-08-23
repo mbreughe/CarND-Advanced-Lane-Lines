@@ -390,7 +390,7 @@ class LaneDetector:
         # Plot detected lanes
         output = map_windows_to_centroids(window_centroids_left, window_centroids_right, self.window_width, self.window_height, warped_e)
         ax2.imshow(output)
-        ax2.set_title('Undistorted Image', fontsize=50)
+        ax2.set_title('After', fontsize=50)
         plt.subplots_adjust(left=0., right=1, top=0.9, bottom=0.)
         plt.savefig(ofname)        
 
@@ -507,6 +507,10 @@ class LaneDetector:
 
         # Undistort
         und = undistort(image, self.objectPoints, self.imagePoints)
+        img_size = (und.shape[1], und.shape[0])
+        
+        if verbose:
+            test_before_after(image, und, prefix + "undistort.jpg")
         
         # Sobel
         edges = sobel(und)
@@ -517,7 +521,10 @@ class LaneDetector:
             test_before_after(image, c_edges, prefix + "sobel.jpg")
         
         # warp perspective
-        img_size = (und.shape[1], und.shape[0])
+        if verbose:
+            warped = cv2.warpPerspective(und, self.M, img_size, flags=cv2.INTER_NEAREST)
+            test_before_after(und, warped, prefix + "transform.jpg")
+            
         warped_e = cv2.warpPerspective(edges, self.M, img_size, flags=cv2.INTER_NEAREST)
         
         # detect lanes in warped space
@@ -632,8 +639,8 @@ if __name__ == "__main__":
     
     video_fname = "project_video.mp4"
     
-    #test_pipeline(cal_dir, "test_images")
-    process_video(cal_dir, video_fname)
+    test_pipeline(cal_dir, "test_images")
+    #process_video(cal_dir, video_fname)
     
     #dumpVideoAtRanges(video_fname, [(39,42)], "frame_dump_2")
     #test_pipeline(cal_dir, "frame_dump_2")
