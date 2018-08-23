@@ -17,7 +17,7 @@ The goals / steps of this project are the following:
 
 [//]: # (Image References)
 
-[undistort]: ./images/test2_undistort.jpg "Undistorted"
+[calibration]: ./images/calibration1.jpg "Camera Calibration"
 [color_thresh]: ./images/test2_sobel.jpg "Color thresholded"
 [perspective]: ./images/test2_transform.jpg "Perspective transform"
 [warp_detect]: ./images/test2_detect.jpg "Lane line detection"
@@ -40,7 +40,63 @@ You're reading it!
 
 #### 1. Briefly state how you computed the camera matrix and distortion coefficients. Provide an example of a distortion corrected calibration image.
 
-TBD
+With the piece of code below, I handle both the calculation of data needed for distortion-correction, as well as the perspective transformation matrices, as both of them need to be done only once. For further optimization, I store the data in a python pickle, so the calibration doesn't need to be redone during testing phases of the rest of the pipeline.
+
+The code loops over various (nx, ny) combinations, as the calibration images contain chess boards of various shapes. 
+
+Once calibration is done cv2.undistort can be called.
+
+```python
+    def getCalibrationPoints(self, fname):
+        # Try various values of nx and ny
+        for nx in [9, 8, 7]:
+            for ny in [6, 5, 7]:
+                objp = np.zeros((nx*ny,3), np.float32)
+                objp[:,:2] = np.mgrid[0:nx,0:ny].T.reshape(-1,2)
+                
+                img = cv2.imread(fname)
+                gray = cv2.cvtColor(img,cv2.COLOR_BGR2GRAY)
+                ret, corners = cv2.findChessboardCorners(gray, (nx, ny), None)
+                
+                if ret:
+                    return (objp, corners)
+        
+        return (None, None)
+        
+    def get_calibration_data(self, cal_dir, cal_save, transform_src, transform_dst):
+        print("Getting calibration points")
+        # Collect calibration points
+        if not os.path.exists(cal_save):
+            # Points in the real world
+            objectPoints = []
+            # Points in the image taken by the camera
+            imagePoints = []
+            for f in os.listdir(cal_dir):
+                if not f.endswith(".jpg"):
+                    continue
+                fname = os.path.join(cal_dir, f)
+                objp, corners = self.getCalibrationPoints(fname)       
+                
+                if objp is not None:
+                    objectPoints.append(objp)
+                    imagePoints.append(corners) 
+            with open(cal_save, "wb") as ofh:
+                pickle.dump(objectPoints, ofh)
+                pickle.dump(imagePoints, ofh)
+        else:
+            with open(cal_save, "rb") as ifh:
+                objectPoints = pickle.load(ifh)
+                imagePoints = pickle.load(ifh)
+                
+        print("Getting transformation matrix M")
+        M = cv2.getPerspectiveTransform(transform_src, transform_dst)
+        Minv = cv2.getPerspectiveTransform(transform_dst, transform_src)
+        
+        return (objectPoints, imagePoints, M, Minv)
+```
+Here is an example:
+
+![calibration of camera][calibration]
 
 ### Pipeline (single images)
 
